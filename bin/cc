@@ -605,6 +605,12 @@ main() {
 		return 0
 	fi
 	run_preflight || return 1
+
+	if [[ $CC_NO_SANDBOX -eq 1 ]]; then
+		# Escape hatch: bypass sbx entirely, exec host claude directly.
+		exec claude "${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}"
+	fi
+
 	load_mounts_config
 	resolve_mounts
 	run_sandbox
