@@ -211,28 +211,231 @@ method filter, and it works even when the prompt injection is clever.
 macOS only for now. Linux may work; I haven't tested it yet. Windows is
 unexplored.
 
-```console
-# 1. Prerequisites
+Setup has five steps. First time through takes about 10-15 minutes,
+mostly waiting for downloads. After each step there's a one-line command
+you can run to confirm it worked.
+
+You'll need:
+
+- A Mac running macOS 13 or newer
+- A Claude account — sign up at [claude.ai](https://claude.ai) if you
+  don't have one (the free tier is enough to get started; `cc` works with
+  any Claude Code tier)
+- About 10 GB of free disk space (most of it is Docker Desktop and the
+  sandbox image)
+
+### Step 1: install Homebrew (if you don't have it yet)
+
+[Homebrew](https://brew.sh) is the standard package manager for macOS. If
+you've installed any developer tool before, you probably already have it.
+
+Check whether it's installed:
+
+```bash
+brew --version
+```
+
+If that prints a version number, skip to Step 2. If it prints "command
+not found," install Homebrew by pasting this into your terminal and
+following the prompts (you'll be asked for your Mac password):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+When it finishes, follow its on-screen instructions to add Homebrew to
+your shell. Then open a new terminal window and run `brew --version`
+again to confirm.
+
+### Step 2: install Docker Desktop
+
+Docker Desktop provides the virtualization layer that sandboxes run
+inside. You need it installed and *running* before `cc` can do anything.
+
+```bash
+brew install --cask docker
+```
+
+Alternative (if you prefer downloading the installer):
+[docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/)
+
+After the install finishes, **open Docker Desktop** (from your
+Applications folder or Spotlight). The first launch will ask you to agree
+to its terms, and then you'll see a whale icon appear in your Mac's menu
+bar. Wait for the whale to stop animating — that means the Docker daemon
+is ready. This usually takes 15-30 seconds.
+
+**Verify:**
+
+```bash
+docker info >/dev/null 2>&1 && echo "✅ Docker is running" || echo "❌ Docker NOT running — open Docker Desktop from Applications"
+```
+
+If you see `❌`, open Docker Desktop and wait for the menu-bar whale to
+settle, then try again. You can quit Docker Desktop anytime you're not
+using `cc`; `cc` will auto-start it on the next run if needed.
+
+### Step 3: install Claude Code and log in
+
+[Claude Code](https://claude.com/claude-code) is Anthropic's official
+command-line interface for Claude. `cc` runs it inside the sandbox, but
+it also needs to be installed on your host so it can authenticate once
+and so the escape hatch (`cc --cc-no-sandbox`) works.
+
+Follow the install instructions on [claude.com/claude-code](https://claude.com/claude-code)
+for your platform. For macOS, the installer puts `claude` on your PATH.
+
+After install, **run Claude Code once** to log in:
+
+```bash
+claude
+```
+
+Inside Claude, press `/` and choose `/login` (or type it). A browser
+window opens — sign in with your Claude account. Come back to the
+terminal, and Claude will confirm you're logged in. Type `/quit` to exit.
+
+This one-time login stores an OAuth token in your Mac's Keychain. `cc`
+will read that token (with your permission) and pass it into the sandbox
+so you don't have to log in again later.
+
+**Verify:**
+
+```bash
+claude auth status
+```
+
+You should see output like:
+
+```json
+{
+  "loggedIn": true,
+  "authMethod": "claude.ai",
+  ...
+}
+```
+
+If `loggedIn` is `false`, run `claude` again and try `/login` inside the
+session.
+
+### Step 4: install sbx (Docker Sandboxes)
+
+`sbx` is the command-line tool that creates and manages sandboxes. It's
+maintained by Docker.
+
+```bash
 brew install docker/tap/sbx
 sbx login
+```
 
-# 2. Install cc to ~/bin
+`sbx login` will open a browser to authenticate you to Docker Hub. Follow
+the prompts — you may be asked to create a free Docker Hub account if you
+don't have one. When it finishes, you'll also be asked to pick a default
+network policy; **choose "Open"** for now (you can always change it later
+with `sbx policy`).
+
+**Verify:**
+
+```bash
+sbx ls
+```
+
+You should see a "No sandboxes found" message (that's the success case —
+you don't have any sandboxes yet).
+
+### Step 5: install `cc`
+
+`cc` itself is a single bash script. Drop it into `~/bin` and put that
+directory on your PATH:
+
+```bash
+# Create ~/bin and download cc into it
 mkdir -p ~/bin
 curl -fsSL https://raw.githubusercontent.com/patclarke/claude-docker-sandbox/main/bin/cc -o ~/bin/cc
 chmod +x ~/bin/cc
 
-# 3. Ensure ~/bin is on PATH (zsh; adapt for your shell)
+# Make sure ~/bin is on PATH (for zsh, which is the macOS default)
 grep -q 'export PATH="$HOME/bin:$PATH"' ~/.zshrc || \
     echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
-exec zsh -l
 
-# 4. Verify
+# Reload your shell so PATH picks up the change
+exec zsh -l
+```
+
+If you use bash instead of zsh, replace `~/.zshrc` with `~/.bash_profile`
+in the line above.
+
+**Verify:**
+
+```bash
+which cc
+```
+
+Should print: `/Users/<your-username>/bin/cc`
+
+### Step 6: final health check
+
+`cc` has a built-in health check that runs through everything from Steps
+2–4 and reports the status:
+
+```bash
 cc --cc-doctor
 ```
 
-The first run of `cc` in a project directory creates
-`~/.config/cc/mounts.conf` with the default mount policy. Edit that file to
-change what's shared with the sandbox.
+You should see five green `OK` lines:
+
+```
+cc doctor
+
+  OK    sbx installed
+  OK    Docker Desktop running
+  OK    sbx authenticated
+  OK    /Users/you/.claude is writable
+  OK    claude installed on host (escape hatch available)
+
+Mount plan (from /Users/you/.config/cc/mounts.conf):
+  RO   /Users/you/Desktop
+  RO   /Users/you/Downloads
+  RW   /Users/you/.claude/projects
+  ...
+
+All checks passed.
+```
+
+If anything is `FAIL`, the doctor prints exactly which step you need to
+revisit. The first time you run `cc --cc-doctor`, it creates
+`~/.config/cc/mounts.conf` with the default mount policy.
+
+**You're done.** Jump to [Quick start](#quick-start) to actually run
+something.
+
+### Troubleshooting
+
+**`brew: command not found`** — you skipped Step 1. Install Homebrew,
+then open a new terminal.
+
+**`docker: command not found` after installing Docker Desktop** —
+Docker Desktop's CLI tools aren't on PATH yet. Close and reopen your
+terminal, then try `docker info` again.
+
+**Docker Desktop won't start** — quit it (right-click the whale icon →
+Quit), open Activity Monitor, force-quit any `Docker` or `com.docker.*`
+processes, and relaunch Docker Desktop from Applications.
+
+**`sbx login` opens a browser but I don't have a Docker Hub account** —
+you can create one for free at
+[hub.docker.com/signup](https://hub.docker.com/signup). sbx needs this to
+authenticate you; there's no cost.
+
+**`cc --cc-doctor` says "claude installed on host" is WARN, not FAIL** —
+that just means the host `claude` binary is missing, so the
+`--cc-no-sandbox` escape hatch won't work. `cc` itself still works fine;
+it uses the claude that lives inside the sandbox. Fix it by revisiting
+Step 3 if you want the escape hatch.
+
+**Anything else** — open an issue at
+[github.com/patclarke/claude-docker-sandbox/issues](https://github.com/patclarke/claude-docker-sandbox/issues)
+with the output of `cc --cc-doctor` and I'll take a look.
 
 ## Quick start
 
