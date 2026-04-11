@@ -380,19 +380,18 @@ sandbox_exists() {
 }
 
 inject_credentials() {
-	local name="$1" token
-	if ! token="$(security find-generic-password -s 'Claude Code-credentials' -a "$USER" -w 2>/dev/null)"; then
-		echo "cc: no Claude Code credentials in macOS Keychain; sandbox claude may prompt /login" >&2
-		return 0
+	local name="$1"
+	# SECURITY: never assign the token to a shell variable — `bash -x` would
+	# expand it and leak the secret to stderr. Pipe straight from `security`
+	# into `sbx exec -i` so the token exists only in the stdin pipe.
+	if ! security find-generic-password -s 'Claude Code-credentials' -a "$USER" -w 2>/dev/null |
+		sbx exec -i "$name" sh -c '
+			mkdir -p /home/agent/.claude &&
+			cat > /home/agent/.claude/.credentials.json &&
+			chmod 600 /home/agent/.claude/.credentials.json
+		' >/dev/null 2>&1; then
+		echo "cc: no Claude Code credentials in macOS Keychain, or injection failed; sandbox claude may prompt /login" >&2
 	fi
-	printf '%s' "$token" | sbx exec -i "$name" sh -c '
-		mkdir -p /home/agent/.claude &&
-		cat > /home/agent/.claude/.credentials.json &&
-		chmod 600 /home/agent/.claude/.credentials.json
-	' >/dev/null 2>&1 || {
-		echo "cc: failed to inject credentials into sandbox (sandbox may prompt /login)" >&2
-		return 0
-	}
 	return 0
 }
 
@@ -422,14 +421,21 @@ setup_share_symlinks() {
 }
 
 build_sbx_argv() {
-	# Always show the attach form (name-only + claude args) — that's what runs in the hot path.
+	# Show the attach form that actually runs. We use `sbx exec` instead of
+	# `sbx run` because sbx's agent launcher misbehaves with our credential
+	# injection + symlink flow (claude gets SIGKILL'd at startup). `sbx exec`
+	# with -i/-t passes stdio through cleanly.
 	local name
 	name="$(compute_sandbox_name)"
 
-	CC_SBX_ARGV=(sbx run "$name")
+	# -i always (stdin passthrough); -t only if stdin is a real TTY
+	local exec_flags="-i"
+	if [[ -t 0 ]]; then
+		exec_flags="-it"
+	fi
 
+	CC_SBX_ARGV=(sbx exec "$exec_flags" "$name" claude)
 	if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then
-		CC_SBX_ARGV+=(--)
 		CC_SBX_ARGV+=("${CLAUDE_ARGS[@]}")
 	fi
 }
@@ -474,18 +480,12 @@ run_sandbox() {
 	# Step 3: set up sharing symlinks (idempotent)
 	setup_share_symlinks "$name"
 
-	# Step 4: attach via sbx run NAME -- CLAUDE_ARGS (no workspace args)
-	local sbx_pid rc=0
-	"${CC_SBX_ARGV[@]}" &
-	sbx_pid=$!
-
-	# Forward common signals to the child
-	trap 'kill -s INT "$sbx_pid" 2>/dev/null || true' INT
-	trap 'kill -s TERM "$sbx_pid" 2>/dev/null || true' TERM
-
-	wait "$sbx_pid" || rc=$?
-	trap - INT TERM
-	return "$rc"
+	# Step 4: attach to sandbox via sbx exec, running claude in foreground.
+	# Do NOT background-and-wait — sbx exec needs connected stdin/stdout/stderr
+	# to pass through to claude, and the `&` + `wait` pattern can sever stdio.
+	# Signal handling: bash in foreground-exec mode forwards SIGINT/SIGTERM
+	# to the child as long as the child is the only process in the job.
+	"${CC_SBX_ARGV[@]}"
 }
 
 parse_args() {
