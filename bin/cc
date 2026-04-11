@@ -247,9 +247,10 @@ write_default_mounts_file() {
 ~/.claude/projects
 
 # Claude Code code/config (RO — prevents a runaway sandbox from tampering with host plugins/skills)
+# Note: sbx only accepts directories as additional workspaces, so user-level
+# ~/.claude/CLAUDE.md is not shared. Project-level CLAUDE.md in the cwd mount still applies.
 ~/.claude/plugins:ro
 ~/.claude/skills:ro
-~/.claude/CLAUDE.md:ro
 
 # Credentials (RO — read by cc on the host, injected into the sandbox via sbx exec)
 ~/.aws:ro
@@ -414,11 +415,6 @@ setup_share_symlinks() {
 			[ -L /home/agent/.claude/skills ] || {
 				rm -rf /home/agent/.claude/skills
 				ln -s '$home/.claude/skills' /home/agent/.claude/skills
-			}
-		}
-		[ -f '$home/.claude/CLAUDE.md' ] && {
-			[ -L /home/agent/.claude/CLAUDE.md ] || {
-				ln -sf '$home/.claude/CLAUDE.md' /home/agent/.claude/CLAUDE.md
 			}
 		}
 		exit 0
