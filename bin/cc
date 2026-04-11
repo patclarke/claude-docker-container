@@ -13,6 +13,18 @@ die() {
 	exit 1
 }
 
+preflight_sbx() {
+	if ! command -v sbx >/dev/null 2>&1; then
+		cat >&2 <<'EOF'
+cc: sbx not found on PATH.
+    Install:   brew install docker/tap/sbx
+    Then run:  sbx login
+EOF
+		return 1
+	fi
+	return 0
+}
+
 usage() {
 	cat <<'EOF'
 cc — run Claude Code inside a Docker Sandbox microVM
@@ -128,7 +140,8 @@ main() {
 		dry_run_output
 		return 0
 	fi
-	echo "cc $CC_VERSION: plan+exec not yet implemented" >&2
+	preflight_sbx || return 1
+	echo "cc $CC_VERSION: preflight_sbx OK" >&2
 	return 0
 }
 
