@@ -110,6 +110,33 @@ run_ls() {
 	sbx ls
 }
 
+run_rm() {
+	preflight_sbx || die_preflight sbx
+	ensure_docker_running
+	preflight_sbx_auth || die_preflight sbx_auth
+
+	local target
+	if [[ -n "$CC_RM_NAME" ]]; then
+		target="$CC_RM_NAME"
+	else
+		target="$(compute_sandbox_name)"
+	fi
+
+	if ! sandbox_exists "$target"; then
+		echo "cc: no sandbox named '$target'" >&2
+		return 1
+	fi
+
+	printf 'cc: remove sandbox "%s"? [y/N] ' "$target" >&2
+	local reply
+	read -r reply
+	if [[ "$reply" != "y" && "$reply" != "Y" ]]; then
+		echo "cc: aborted." >&2
+		return 1
+	fi
+	sbx rm "$target"
+}
+
 run_doctor() {
 	local fails=0
 	echo "cc doctor"
@@ -610,6 +637,10 @@ main() {
 	fi
 	if [[ $CC_LS -eq 1 ]]; then
 		run_ls
+		return $?
+	fi
+	if [[ $CC_RM -eq 1 ]]; then
+		run_rm
 		return $?
 	fi
 	if [[ $CC_DRY_RUN -eq 1 ]]; then
