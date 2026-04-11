@@ -25,6 +25,39 @@ EOF
 	return 0
 }
 
+preflight_docker() {
+	if docker info >/dev/null 2>&1; then
+		return 0
+	fi
+
+	echo "cc: Docker Desktop is not running. Starting it..." >&2
+	if ! open -a Docker 2>/dev/null; then
+		die "failed to launch Docker Desktop (open -a Docker). Start it manually, then re-run cc."
+	fi
+
+	local waited=0
+	local max_wait=30
+	while ((waited < max_wait)); do
+		if docker info >/dev/null 2>&1; then
+			break
+		fi
+		sleep 1
+		waited=$((waited + 1))
+		printf '.' >&2
+	done
+	echo >&2
+
+	if ! docker info >/dev/null 2>&1; then
+		die "Docker Desktop failed to start within ${max_wait}s. Open it manually, wait for the whale icon to settle, then re-run cc."
+	fi
+
+	if ! docker ps >/dev/null 2>&1; then
+		die "Docker Desktop is responding but the daemon is not ready (docker ps failed). Wait a few seconds and retry."
+	fi
+
+	return 0
+}
+
 usage() {
 	cat <<'EOF'
 cc — run Claude Code inside a Docker Sandbox microVM
@@ -141,7 +174,8 @@ main() {
 		return 0
 	fi
 	preflight_sbx || return 1
-	echo "cc $CC_VERSION: preflight_sbx OK" >&2
+	preflight_docker || return 1
+	echo "cc $CC_VERSION: preflight OK through docker" >&2
 	return 0
 }
 
