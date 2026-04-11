@@ -1,0 +1,662 @@
+#!/usr/bin/env bash
+#
+# cc — run Claude Code inside a Docker Sandbox microVM
+# https://github.com/patclarke/claude-docker-sandbox
+
+set -euo pipefail
+
+readonly CC_VERSION="0.1.0"
+readonly CC_CONFIG_DIR="$HOME/.config/cc"
+readonly CC_MOUNTS_FILE="$CC_CONFIG_DIR/mounts.conf"
+
+die() {
+	echo "cc: $*" >&2
+	exit 1
+}
+
+preflight_sbx() {
+	command -v sbx >/dev/null 2>&1
+}
+
+preflight_docker() {
+	docker info >/dev/null 2>&1 && docker ps >/dev/null 2>&1
+}
+
+preflight_sbx_auth() {
+	sbx ls >/dev/null 2>&1
+}
+
+preflight_claude_dir() {
+	[[ -d "$HOME/.claude" && -w "$HOME/.claude" ]]
+}
+
+preflight_claude_binary() {
+	command -v claude >/dev/null 2>&1
+}
+
+die_preflight() {
+	case "$1" in
+	sbx)
+		cat >&2 <<'EOF'
+cc: sbx not found on PATH.
+    Install:   brew install docker/tap/sbx
+    Then run:  sbx login
+EOF
+		;;
+	docker)
+		echo "cc: Docker Desktop is not responding. Run 'docker info' to debug." >&2
+		;;
+	sbx_auth)
+		echo "cc: sbx is not authenticated. Run: sbx login" >&2
+		;;
+	claude_dir)
+		echo "cc: $HOME/.claude is missing or not writable. Session history would be lost." >&2
+		;;
+	claude_binary)
+		echo "cc: claude binary not found on PATH." >&2
+		;;
+	esac
+	exit 1
+}
+
+ensure_docker_running() {
+	if docker info >/dev/null 2>&1; then
+		return 0
+	fi
+	echo "cc: Docker Desktop is not running. Starting it..." >&2
+	open -a Docker 2>/dev/null || die "failed to launch Docker Desktop."
+	local waited=0
+	while ((waited < 30)); do
+		if docker info >/dev/null 2>&1; then
+			echo >&2
+			return 0
+		fi
+		sleep 1
+		waited=$((waited + 1))
+		printf '.' >&2
+	done
+	echo >&2
+	die "Docker Desktop failed to start within 30s."
+}
+
+run_preflight() {
+	if [[ $CC_NO_SANDBOX -eq 1 ]]; then
+		preflight_claude_binary || die_preflight claude_binary
+		return 0
+	fi
+	preflight_sbx || die_preflight sbx
+	ensure_docker_running
+	preflight_docker || die_preflight docker
+	preflight_sbx_auth || die_preflight sbx_auth
+	preflight_claude_dir || die_preflight claude_dir
+	return 0
+}
+
+print_check() {
+	local state="$1" label="$2"
+	case "$state" in
+	OK) printf '  \033[32mOK\033[0m    %s\n' "$label" ;;
+	WARN) printf '  \033[33mWARN\033[0m  %s\n' "$label" ;;
+	FAIL) printf '  \033[31mFAIL\033[0m  %s\n' "$label" ;;
+	esac
+}
+
+run_ls() {
+	preflight_sbx || die_preflight sbx
+	ensure_docker_running
+	preflight_sbx_auth || die_preflight sbx_auth
+	echo "# active sbx sandboxes"
+	sbx ls
+}
+
+run_rm() {
+	preflight_sbx || die_preflight sbx
+	ensure_docker_running
+	preflight_sbx_auth || die_preflight sbx_auth
+
+	local target
+	if [[ -n "$CC_RM_NAME" ]]; then
+		target="$CC_RM_NAME"
+	else
+		target="$(compute_sandbox_name)"
+	fi
+
+	if ! sandbox_exists "$target"; then
+		echo "cc: no sandbox named '$target'" >&2
+		return 1
+	fi
+
+	printf 'cc: remove sandbox "%s"? [y/N] ' "$target" >&2
+	local reply
+	read -r reply
+	if [[ "$reply" != "y" && "$reply" != "Y" ]]; then
+		echo "cc: aborted." >&2
+		return 1
+	fi
+	sbx rm "$target"
+}
+
+run_doctor() {
+	local fails=0
+	echo "cc doctor"
+	echo
+
+	if preflight_sbx; then
+		print_check OK "sbx installed"
+	else
+		print_check FAIL "sbx installed    (brew install docker/tap/sbx)"
+		fails=$((fails + 1))
+	fi
+
+	if preflight_docker; then
+		print_check OK "Docker Desktop running"
+	else
+		print_check FAIL "Docker Desktop running    (open -a Docker)"
+		fails=$((fails + 1))
+	fi
+
+	if preflight_sbx_auth; then
+		print_check OK "sbx authenticated"
+	else
+		print_check FAIL "sbx authenticated    (sbx login)"
+		fails=$((fails + 1))
+	fi
+
+	if preflight_claude_dir; then
+		print_check OK "$HOME/.claude is writable"
+	else
+		print_check FAIL "$HOME/.claude is writable    (check permissions)"
+		fails=$((fails + 1))
+	fi
+
+	if preflight_claude_binary; then
+		print_check OK "claude installed on host (escape hatch available)"
+	else
+		print_check WARN "claude not on host    (--cc-no-sandbox will fail)"
+	fi
+
+	echo
+	echo "Mount plan (from $CC_MOUNTS_FILE):"
+	load_mounts_config
+	resolve_mounts
+	if [[ ${#CC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then
+		echo "  (empty)"
+	else
+		local entry mode path
+		for entry in "${CC_RESOLVED_MOUNTS[@]}"; do
+			if [[ "$entry" == *:ro ]]; then
+				mode="RO"
+				path="${entry%:ro}"
+			else
+				mode="RW"
+				path="$entry"
+			fi
+			printf '  %-3s %s\n' "$mode" "$path"
+		done
+	fi
+
+	# shellcheck disable=SC2088
+	if [[ -f "$CC_MOUNTS_FILE" ]] && ! grep -q '~/\.claude/projects' "$CC_MOUNTS_FILE"; then
+		echo
+		echo "WARN: ~/.config/cc/mounts.conf looks out of date (missing ~/.claude/projects)."
+		echo "      Consider deleting it to regenerate with current defaults."
+	fi
+
+	echo
+	if ((fails > 0)); then
+		echo "$fails check(s) failed."
+		return 1
+	fi
+	echo "All checks passed."
+	return 0
+}
+
+usage() {
+	cat <<EOF
+cc $CC_VERSION — run Claude Code inside a Docker Sandbox microVM
+
+USAGE:
+    cc [CC_FLAGS] [CLAUDE_ARGS...]
+
+WRAPPER FLAGS (consumed by cc, not forwarded):
+    --cc-name <label>       Named sandbox for parallelism
+    --cc-mount <path>[:ro]  Add an extra mount for this invocation (repeatable)
+    --cc-no-mount <path>    Skip a config-file mount for this invocation (repeatable)
+    --cc-no-sandbox         Escape hatch — exec host claude directly
+    --cc-rm [name]          Remove the sandbox for cwd (or the named one)
+    --cc-ls                 List active sandboxes
+    --cc-dry-run            Print the resolved sbx run command, do not exec
+    --cc-doctor             Run preflight checks + show resolved mount list
+    --cc-help, -h           Show this help
+
+Everything else is forwarded to claude inside the sandbox.
+
+EXAMPLES:
+    cc                          # fresh session in cwd
+    cc -c                       # resume most recent session in cwd
+    cc --remote-control -c      # forward arbitrary claude flags
+    cc --cc-name exp-a -c       # named parallel sandbox
+    cc --cc-mount ~/notes:ro    # ad-hoc extra mount
+    cc --cc-no-sandbox -c       # bypass the sandbox entirely
+
+CONFIG:
+    ~/.config/cc/mounts.conf    Durable mount policy (created on first run)
+EOF
+}
+
+# Parser state — populated by parse_args
+CC_NAME=""
+CC_NO_SANDBOX=0
+CC_DRY_RUN=0
+CC_DOCTOR=0
+CC_LS=0
+CC_RM=0
+CC_RM_NAME=""
+CC_EXTRA_MOUNTS=()
+CC_SKIP_MOUNTS=()
+CC_CONFIG_MOUNTS=()
+CC_RESOLVED_MOUNTS=()
+CC_SBX_ARGV=()
+CC_CREATE_ARGV=()
+CLAUDE_ARGS=()
+
+write_default_mounts_file() {
+	mkdir -p "$CC_CONFIG_DIR"
+	cat >"$CC_MOUNTS_FILE" <<'EOF'
+# cc mounts config
+# Format:  <path>[:ro]
+# No suffix = read-write. ":ro" = read-only.
+# Non-existent paths are skipped silently at launch.
+
+# Cross-project reference (read-only view of sibling repos).
+# cc automatically strips any mount that's an ancestor of $PWD, so
+# this is safe even when cwd is inside ~/workspace.
+~/workspace:ro
+
+# Ad-hoc file sharing from normal macOS locations
+~/Desktop:ro
+~/Downloads:ro
+
+# Claude Code session sharing (RW — sessions from host visible in sandbox and vice versa)
+~/.claude/projects
+
+# Claude Code code/config (RO — prevents a runaway sandbox from tampering with host plugins/skills)
+# Note: sbx only accepts directories as additional workspaces, so user-level
+# ~/.claude/CLAUDE.md is not shared. Project-level CLAUDE.md in the cwd mount still applies.
+~/.claude/plugins:ro
+~/.claude/skills:ro
+
+# Credentials (RO — read by cc on the host, injected into the sandbox via sbx exec)
+~/.aws:ro
+~/.config/gh:ro
+~/.ssh:ro
+EOF
+	echo "cc: created $CC_MOUNTS_FILE with defaults." >&2
+}
+
+load_mounts_config() {
+	if [[ ! -f "$CC_MOUNTS_FILE" ]]; then
+		write_default_mounts_file
+	fi
+	CC_CONFIG_MOUNTS=()
+	local line
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		# strip inline comments and trailing whitespace
+		line="${line%%#*}"
+		line="${line%"${line##*[![:space:]]}"}"
+		line="${line#"${line%%[![:space:]]*}"}"
+		[[ -z "$line" ]] && continue
+		# expand leading ~
+		# shellcheck disable=SC2088
+		if [[ "$line" == "~/"* ]]; then
+			line="$HOME/${line:2}"
+		elif [[ "$line" == "~" ]]; then
+			line="$HOME"
+		fi
+		CC_CONFIG_MOUNTS+=("$line")
+	done <"$CC_MOUNTS_FILE"
+}
+
+mount_path_only() {
+	# strip :ro suffix, expand leading ~
+	local entry="$1"
+	local path="${entry%:ro}"
+	# shellcheck disable=SC2088
+	if [[ "$path" == "~/"* ]]; then
+		path="$HOME/${path:2}"
+	elif [[ "$path" == "~" ]]; then
+		path="$HOME"
+	fi
+	echo "$path"
+}
+
+resolve_mounts() {
+	CC_RESOLVED_MOUNTS=("${CC_CONFIG_MOUNTS[@]+"${CC_CONFIG_MOUNTS[@]}"}")
+
+	# Append --cc-mount entries (expand ~)
+	local extra expanded suffix path
+	for extra in "${CC_EXTRA_MOUNTS[@]+"${CC_EXTRA_MOUNTS[@]}"}"; do
+		suffix=""
+		path="$extra"
+		if [[ "$extra" == *:ro ]]; then
+			suffix=":ro"
+			path="${extra%:ro}"
+		fi
+		# shellcheck disable=SC2088
+		if [[ "$path" == "~/"* ]]; then
+			expanded="$HOME/${path:2}$suffix"
+		elif [[ "$path" == "~" ]]; then
+			expanded="$HOME$suffix"
+		else
+			expanded="$path$suffix"
+		fi
+		CC_RESOLVED_MOUNTS+=("$expanded")
+	done
+
+	# Remove --cc-no-mount entries by absolute-path match
+	local skip skip_abs new_list current current_abs
+	for skip in "${CC_SKIP_MOUNTS[@]+"${CC_SKIP_MOUNTS[@]}"}"; do
+		skip_abs="$(mount_path_only "$skip")"
+		new_list=()
+		for current in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+			current_abs="$(mount_path_only "$current")"
+			if [[ "$current_abs" != "$skip_abs" ]]; then
+				new_list+=("$current")
+			fi
+		done
+		CC_RESOLVED_MOUNTS=("${new_list[@]+"${new_list[@]}"}")
+	done
+	filter_existing_mounts
+	strip_cwd_ancestors
+}
+
+filter_existing_mounts() {
+	local kept=() entry path
+	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+		path="$(mount_path_only "$entry")"
+		if [[ -e "$path" ]]; then
+			kept+=("$entry")
+		fi
+	done
+	CC_RESOLVED_MOUNTS=("${kept[@]+"${kept[@]}"}")
+}
+
+strip_cwd_ancestors() {
+	local pwd_abs kept=() entry path
+	pwd_abs="$(pwd -P)"
+	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+		path="$(mount_path_only "$entry")"
+		# Strip if cwd is strictly UNDER this mount (ancestor). Equal is fine — that's the primary.
+		if [[ "$pwd_abs" == "$path"/* && "$pwd_abs" != "$path" ]]; then
+			echo "cc: stripping ancestor mount $path (cwd is inside it)" >&2
+			continue
+		fi
+		kept+=("$entry")
+	done
+	CC_RESOLVED_MOUNTS=("${kept[@]+"${kept[@]}"}")
+}
+
+compute_sandbox_name() {
+	if [[ -n "$CC_NAME" ]]; then
+		echo "$CC_NAME"
+		return 0
+	fi
+	local abs basename hash
+	abs="$(pwd -P)"
+	basename="$(basename "$abs")"
+	hash="$(printf '%s' "$abs" | shasum -a 1 | cut -c1-6)"
+	echo "${basename}-${hash}"
+}
+
+sandbox_exists() {
+	local name="$1"
+	sbx ls 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$name"
+}
+
+inject_credentials() {
+	local name="$1"
+	# SECURITY: never assign the token to a shell variable — `bash -x` would
+	# expand it and leak the secret to stderr. Pipe straight from `security`
+	# into `sbx exec -i` so the token exists only in the stdin pipe.
+	if ! security find-generic-password -s 'Claude Code-credentials' -a "$USER" -w 2>/dev/null |
+		sbx exec -i "$name" sh -c '
+			mkdir -p /home/agent/.claude &&
+			cat > /home/agent/.claude/.credentials.json &&
+			chmod 600 /home/agent/.claude/.credentials.json
+		' >/dev/null 2>&1; then
+		echo "cc: no Claude Code credentials in macOS Keychain, or injection failed; sandbox claude may prompt /login" >&2
+	fi
+	return 0
+}
+
+setup_share_symlinks() {
+	local name="$1" home="$HOME"
+	# Redirect stdin from /dev/null so this sbx exec doesn't steal cc's stdin.
+	# Without the redirect, sbx exec inherits cc's stdin and consumes it, which
+	# leaves the final `sbx exec -i ... claude` attach with no stdin and claude
+	# gets SIGKILL'd (exit 137).
+	sbx exec "$name" sh -c "
+		[ -d '$home/.claude/projects' ] && {
+			[ -L /home/agent/.claude/projects ] || {
+				rm -rf /home/agent/.claude/projects
+				ln -s '$home/.claude/projects' /home/agent/.claude/projects
+			}
+		}
+		[ -d '$home/.claude/plugins' ] && {
+			[ -L /home/agent/.claude/plugins ] || {
+				rm -rf /home/agent/.claude/plugins
+				ln -s '$home/.claude/plugins' /home/agent/.claude/plugins
+			}
+		}
+		[ -d '$home/.claude/skills' ] && {
+			[ -L /home/agent/.claude/skills ] || {
+				rm -rf /home/agent/.claude/skills
+				ln -s '$home/.claude/skills' /home/agent/.claude/skills
+			}
+		}
+		exit 0
+	" </dev/null >/dev/null 2>&1 || true
+}
+
+build_sbx_argv() {
+	# Show the attach form that actually runs. We use `sbx exec` instead of
+	# `sbx run` because sbx's agent launcher misbehaves with our credential
+	# injection + symlink flow (claude gets SIGKILL'd at startup). `sbx exec`
+	# with -i/-t passes stdio through cleanly.
+	local name
+	name="$(compute_sandbox_name)"
+
+	# -i always (stdin passthrough); -t only if stdin is a real TTY
+	local exec_flags="-i"
+	if [[ -t 0 ]]; then
+		exec_flags="-it"
+	fi
+
+	# Wrap the claude invocation in `env VAR=... claude ...` to propagate
+	# terminal/color variables into the sandbox. sbx exec does not inherit
+	# the host's TERM/COLORTERM/etc, so without this claude defaults to
+	# minimal/no-color output.
+	CC_SBX_ARGV=(
+		sbx exec "$exec_flags" "$name"
+		env
+		"TERM=${TERM:-xterm-256color}"
+		"COLORTERM=${COLORTERM:-truecolor}"
+		"LANG=${LANG:-en_US.UTF-8}"
+		"LC_ALL=${LC_ALL:-en_US.UTF-8}"
+		claude
+	)
+	if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then
+		CC_SBX_ARGV+=("${CLAUDE_ARGS[@]}")
+	fi
+}
+
+build_create_argv() {
+	# Build the sbx create argv for --cc-dry-run display and actual creation.
+	local name pwd_abs
+	name="$(compute_sandbox_name)"
+	pwd_abs="$(pwd -P)"
+
+	CC_CREATE_ARGV=(sbx create claude "$pwd_abs" --name "$name")
+
+	local entry path
+	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+		path="$(mount_path_only "$entry")"
+		if [[ "$path" == "$pwd_abs" ]]; then
+			continue
+		fi
+		CC_CREATE_ARGV+=("$entry")
+	done
+}
+
+run_sandbox() {
+	build_sbx_argv
+	local name
+	name="$(compute_sandbox_name)"
+
+	# Step 1: create sandbox if it doesn't exist yet
+	if ! sandbox_exists "$name"; then
+		local create_argv=()
+		build_create_argv
+		create_argv=("${CC_CREATE_ARGV[@]}")
+		"${create_argv[@]}" || {
+			echo "cc: failed to create sandbox $name" >&2
+			return 1
+		}
+	fi
+
+	# Step 2: inject credentials (idempotent, refreshes token each run)
+	inject_credentials "$name"
+
+	# Step 3: set up sharing symlinks (idempotent)
+	setup_share_symlinks "$name"
+
+	# sbx race workaround: rapid successive sbx calls (create, exec for inject,
+	# exec for symlinks, then exec for attach) leave the sbx daemon in a state
+	# where the interactive attach is SIGKILL'd at startup (exit 137). A brief
+	# pause before the attach lets the daemon settle. 1s is sufficient in
+	# practice; under 1s is unreliable.
+	sleep 1
+
+	# Step 4: exec into sbx exec so cc's process becomes sbx exec entirely.
+	# Using `exec` avoids any parent-child stdio/signal layering issues
+	# between cc and the attach command.
+	exec "${CC_SBX_ARGV[@]}"
+}
+
+parse_args() {
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--cc-help | -h)
+			usage
+			exit 0
+			;;
+		--cc-name)
+			[[ $# -ge 2 ]] || die "--cc-name requires a value"
+			CC_NAME="$2"
+			shift 2
+			;;
+		--cc-mount)
+			[[ $# -ge 2 ]] || die "--cc-mount requires a <path>[:ro] value"
+			CC_EXTRA_MOUNTS+=("$2")
+			shift 2
+			;;
+		--cc-no-mount)
+			[[ $# -ge 2 ]] || die "--cc-no-mount requires a path"
+			CC_SKIP_MOUNTS+=("$2")
+			shift 2
+			;;
+		--cc-no-sandbox)
+			CC_NO_SANDBOX=1
+			shift
+			;;
+		--cc-dry-run)
+			CC_DRY_RUN=1
+			shift
+			;;
+		--cc-doctor)
+			CC_DOCTOR=1
+			shift
+			;;
+		--cc-ls)
+			CC_LS=1
+			shift
+			;;
+		--cc-rm)
+			CC_RM=1
+			if [[ $# -ge 2 && "$2" != -* ]]; then
+				CC_RM_NAME="$2"
+				shift 2
+			else
+				shift
+			fi
+			;;
+		*)
+			CLAUDE_ARGS+=("$1")
+			shift
+			;;
+		esac
+	done
+}
+
+dry_run_output() {
+	load_mounts_config
+	resolve_mounts
+	build_sbx_argv
+
+	local pwd_abs
+	pwd_abs="$(pwd -P)"
+
+	echo "# cc dry-run"
+	echo "CWD=$pwd_abs"
+	echo "SANDBOX_NAME=$(compute_sandbox_name)"
+	echo "NO_SANDBOX=$CC_NO_SANDBOX"
+	echo
+	echo "MOUNTS (resolved, existing only):"
+	if [[ ${#CC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then
+		echo "  (none)"
+	else
+		local m
+		for m in "${CC_RESOLVED_MOUNTS[@]}"; do
+			echo "  $m"
+		done
+	fi
+	echo
+	echo "CLAUDE_ARGS: ${CLAUDE_ARGS[*]:-<none>}"
+	echo
+	echo "COMMAND:"
+	printf '  %q ' "${CC_SBX_ARGV[@]}"
+	echo
+}
+
+main() {
+	parse_args "$@"
+	if [[ $CC_DOCTOR -eq 1 ]]; then
+		run_doctor
+		return $?
+	fi
+	if [[ $CC_LS -eq 1 ]]; then
+		run_ls
+		return $?
+	fi
+	if [[ $CC_RM -eq 1 ]]; then
+		run_rm
+		return $?
+	fi
+	if [[ $CC_DRY_RUN -eq 1 ]]; then
+		dry_run_output
+		return 0
+	fi
+	run_preflight || return 1
+
+	if [[ $CC_NO_SANDBOX -eq 1 ]]; then
+		# Escape hatch: bypass sbx entirely, exec host claude directly.
+		exec claude "${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}"
+	fi
+
+	load_mounts_config
+	resolve_mounts
+	run_sandbox
+	return $?
+}
+
+main "$@"

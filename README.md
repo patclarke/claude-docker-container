@@ -2,30 +2,33 @@
 
 `cc` — a small bash wrapper that runs [Claude Code](https://claude.com/claude-code)
 inside a [Docker Sandbox](https://docs.docker.com/ai/sandboxes/) microVM, so
-`--dangerously-skip-permissions` becomes a bounded risk instead of an
-unbounded one.
+unsupervised agents have a bounded blast radius instead of an unbounded one.
 
-> **Status:** Design approved, implementation in progress. The `cc` script
-> itself has not been written yet. See [Roadmap](#roadmap) for what's coming.
+> **Status:** Core implementation complete. Live sandbox testing verified. See
+> [Roadmap](#roadmap) for remaining work.
 
 ## What this solves
 
-Running `claude --dangerously-skip-permissions` on a trusted developer machine
-is a calculated but unbounded risk: an agent with unsupervised shell access can
-touch anything the user can touch. Docker Sandboxes give each agent its own
-microVM with its own filesystem, Docker daemon, and network, so a runaway
-agent is contained to what you explicitly mount in.
+Running `claude` on a trusted developer machine with unsupervised shell access
+is a calculated but unbounded risk: a runaway agent can touch anything the user
+can touch. Docker Sandboxes give each agent its own microVM with its own
+filesystem, Docker daemon, and network, so a runaway agent is contained to what
+you explicitly mount in.
 
 `cc` is a thin shell wrapper around Docker's `sbx` CLI that:
 
 - Mounts your current working directory **read-write** into the sandbox
-- Mounts a configurable allow-list of host paths **read-only** for context
+- Mounts a configurable allow-list of host paths for context
   (e.g. `~/workspace` for cross-project references, `~/Desktop` / `~/Downloads`
   for ad-hoc file sharing)
-- Shares `~/.claude` **read-write** so your Claude Code session history persists
-  across runs *and* is visible from both host `claude` and sandboxed `cc`
+- Shares `~/.claude/projects` **read-write** so sessions persist across runs
+  and are visible from both host `claude` and sandboxed `cc`
+- Shares `~/.claude/plugins` and `~/.claude/skills` **read-only** so your
+  tools are available without letting a sandbox session tamper with them
 - Shares `~/.aws`, `~/.config/gh`, and `~/.ssh` **read-only** so credentials
   work without letting the agent overwrite them
+- Auto-injects your Claude Code credentials from the macOS Keychain on every
+  invocation, so the sandbox is authenticated without any manual login step
 - Forwards every non-`--cc-*` flag to `claude` inside the sandbox
 - Runs preflight checks (sbx installed, Docker running, sbx authenticated,
   `~/.claude` writable) and auto-starts Docker Desktop if it isn't already up
@@ -56,15 +59,29 @@ agent is contained to what you explicitly mount in.
 
 ## Install
 
-> Not yet available. Install instructions will land here once the `cc` script
-> ships. Planned form:
->
-> ```console
-> curl -fsSL https://raw.githubusercontent.com/patclarke/claude-docker-sandbox/main/bin/cc -o ~/bin/cc
-> chmod +x ~/bin/cc
-> # make sure ~/bin is on PATH
-> cc --cc-doctor
-> ```
+macOS only for now. Linux may work but is untested.
+
+```console
+# Prerequisites: Docker Desktop + sbx CLI
+brew install docker/tap/sbx
+sbx login
+
+# Install cc to ~/bin
+mkdir -p ~/bin
+curl -fsSL https://raw.githubusercontent.com/patclarke/claude-docker-sandbox/main/bin/cc -o ~/bin/cc
+chmod +x ~/bin/cc
+
+# Ensure ~/bin is on PATH (zsh; adapt for your shell)
+grep -q 'export PATH="$HOME/bin:$PATH"' ~/.zshrc || \
+    echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+exec zsh -l
+
+# Verify
+cc --cc-doctor
+```
+
+The first run of `cc` in a project directory creates `~/.config/cc/mounts.conf`
+with default mounts. Edit that file to change what gets shared with the sandbox.
 
 ## Usage
 
@@ -128,12 +145,19 @@ through to `claude` untouched.
 
 The mount plan is built on every invocation in this order:
 
-1. **Primary mount: `$PWD`** — read-write, always. Becomes sbx's main
-   workspace and the starting directory for the agent.
-2. **Config file** — `~/.config/cc/mounts.conf`, one mount per line.
-3. **`--cc-mount` flags** — appended.
-4. **`--cc-no-mount` flags** — removed.
-5. **Dedupe** — later / more specific entries win.
+1. **Primary mount: `$PWD`** — read-write, always. Remapped to
+   `/home/agent/workspace` inside the sandbox (sbx does not preserve the
+   absolute host path for the primary mount). This is the agent's starting
+   directory.
+2. **Additional mounts** — every other path in the mount list lands at its
+   absolute host path inside the sandbox (e.g. `~/.aws` is visible at
+   `/Users/you/.aws`).
+3. **Config file** — `~/.config/cc/mounts.conf`, one mount per line.
+4. **`--cc-mount` flags** — appended.
+5. **`--cc-no-mount` flags** — removed.
+6. **Ancestor stripping** — any mount whose path is a strict ancestor of `$PWD`
+   is silently removed. This prevents nested-mount failures when cwd is inside
+   `~/workspace`.
 
 ### Default `~/.config/cc/mounts.conf`
 
@@ -144,32 +168,44 @@ Written automatically the first time you run `cc`:
 # No suffix = read-write. ":ro" = read-only.
 # Non-existent paths are skipped silently at launch.
 
-# Cross-project reference (read-only view of sibling repos)
+# Cross-project reference (read-only view of sibling repos).
+# cc automatically strips any mount that's an ancestor of $PWD, so
+# this is safe even when cwd is inside ~/workspace.
 ~/workspace:ro
 
 # Ad-hoc file sharing from normal macOS locations
 ~/Desktop:ro
 ~/Downloads:ro
 
-# Host config surfaced into the sandbox
-~/.claude                 # RW — session persistence + plugins/skills
-~/.aws:ro                 # AWS credentials read-only
-~/.config/gh:ro           # gh CLI auth read-only
-~/.ssh:ro                 # git over ssh read-only
+# Claude Code session sharing (RW — sessions from host visible in sandbox and vice versa)
+~/.claude/projects
+
+# Claude Code code/config (RO — prevents a runaway sandbox from tampering with host plugins/skills)
+# Note: sbx only accepts directories as additional workspaces, so user-level
+# ~/.claude/CLAUDE.md is not shared. Project-level CLAUDE.md in the cwd mount still applies.
+~/.claude/plugins:ro
+~/.claude/skills:ro
+
+# Credentials (RO — read by cc on the host, injected into the sandbox via sbx exec)
+~/.aws:ro
+~/.config/gh:ro
+~/.ssh:ro
 ```
 
 ### What each mount is for
 
-| Path                 | Mode | Why                                                   |
-|----------------------|------|-------------------------------------------------------|
-| `$PWD` (launch dir)  | RW   | The actual work happens here                          |
-| `~/workspace`        | RO   | Cross-project context; writes only via launch dir     |
-| `~/Desktop`          | RO   | Share a file with the agent without moving it         |
-| `~/Downloads`        | RO   | Same, for downloaded artifacts                        |
-| `~/.claude`          | RW   | Session persistence; host ↔ sandbox visibility        |
-| `~/.aws`             | RO   | Credentials available to code running in the sandbox  |
-| `~/.config/gh`       | RO   | `gh` CLI auth                                         |
-| `~/.ssh`             | RO   | git over ssh                                          |
+| Path                    | Mode | Why                                                            |
+|-------------------------|------|----------------------------------------------------------------|
+| `$PWD` (launch dir)     | RW   | The actual work happens here                                   |
+| `~/workspace`           | RO   | Cross-project context; stripped if cwd is inside it           |
+| `~/Desktop`             | RO   | Share a file with the agent without moving it                  |
+| `~/Downloads`           | RO   | Same, for downloaded artifacts                                 |
+| `~/.claude/projects`    | RW   | Session persistence; host ↔ sandbox visibility                 |
+| `~/.claude/plugins`     | RO   | Host plugins available in sandbox; sandbox cannot modify them  |
+| `~/.claude/skills`      | RO   | Host skills available in sandbox; sandbox cannot modify them   |
+| `~/.aws`                | RO   | Credentials available to code running in the sandbox           |
+| `~/.config/gh`          | RO   | `gh` CLI auth                                                  |
+| `~/.ssh`                | RO   | git over ssh                                                   |
 
 ### Customizing
 
@@ -186,21 +222,51 @@ echo '~/Notes:ro' >> ~/.config/cc/mounts.conf
 
 One-off changes: use `--cc-mount` or `--cc-no-mount` on a single invocation.
 
+## Auth
+
+`cc` auto-extracts your Claude Code credentials from the macOS Keychain on
+every invocation and injects them into the sandbox before attaching. The token
+lands at `/home/agent/.claude/.credentials.json` with `600` permissions.
+
+This means:
+- No manual `/login` step when starting a new sandbox
+- Token is refreshed on every `cc` invocation, so Keychain rotations propagate
+  automatically
+- If the Keychain read fails (non-macOS, not logged into Claude Code, etc.),
+  `cc` prints a warning and continues; you can run `/login` inside the sandbox
+  once per sandbox to authenticate manually
+
+## Plugins and skills
+
+Plugins and skills from `~/.claude/plugins` and `~/.claude/skills` are mounted
+**read-only** into the sandbox. This means:
+
+- Your host plugins and skills work inside the sandbox exactly as on the host
+- Installing a plugin from inside a sandbox session does **not** persist — the
+  sandbox cannot write to those directories
+- To install a new plugin, run `claude` on the host (plain, without `cc`) and
+  install it there; it will be available in sandbox sessions automatically on
+  the next `cc` invocation
+
+This is intentional: a runaway or compromised sandbox cannot inject malicious
+code into `~/.claude/plugins` that would then execute on the host the next time
+host `claude` loads those plugins.
+
 ## Session persistence
 
-Because `~/.claude` is a **live bind mount** (not a copy), any session files
-written from inside the sandbox land in your real `~/.claude/projects/…`
-directory on the host. Inside the sandbox, `cwd` resolves to the same absolute
-host path (`sbx` preserves absolute paths), so `claude -c` finds the same
-sessions whether you're running it on the host or through `cc`.
+`~/.claude/projects` is mounted **read-write**. Any session files written from
+inside the sandbox land in your real `~/.claude/projects/…` directory on the
+host.
 
-Three properties fall out of this:
+Inside the sandbox, `cc` creates symlinks from `/home/agent/.claude/projects`
+to the host path (preserved at its absolute location by sbx). This means:
+- Conversations **survive** `sbx rm`, OS reboots, or swapping sandbox images
+- A session started with host `claude` is resumable with `cc -c`, and vice versa
 
-1. Conversations **survive** `sbx rm`, OS reboots, or swapping sandbox images
-2. A session started with host `claude` is resumable with `cc -c`, and vice
-   versa
-3. Your Claude Code plugins and skills (`~/.claude/plugins/`) are visible
-   inside the sandbox — plugin skills work identically in both environments
+Note: the primary workspace is remapped to `/home/agent/workspace` inside the
+sandbox (not the absolute host path), so session keys may differ between host
+and sandbox sessions when both are run in the same directory. Use `-c` or
+`--resume <session-id>` to be explicit about which session to resume.
 
 ## Security model
 
@@ -208,9 +274,9 @@ Three properties fall out of this:
 on your host filesystem is invisible.
 
 **What the sandbox can modify:** only the `$PWD` you launched from and
-`~/.claude`. Everything else in the default mount list is read-only, so a
-runaway agent cannot rewrite your credentials, overwrite sibling projects, or
-touch your Desktop files.
+`~/.claude/projects`. Everything else in the default mount list is read-only,
+so a runaway agent cannot rewrite your credentials, overwrite sibling projects,
+touch your Desktop files, or modify your plugins and skills.
 
 **What isolates the sandbox from your host:** microVM (hypervisor-level)
 isolation via Docker Sandboxes. Each sandbox has its own Linux kernel,
@@ -218,13 +284,9 @@ filesystem, Docker daemon, and network namespace. Outbound traffic routes
 through an HTTP/HTTPS proxy on your host for credential injection and network
 policy.
 
-**What `--dangerously-skip-permissions` buys you** inside this model: the
-ability to run unsupervised agents that install packages, run `git` commands,
-and execute shell tools without a per-command prompt, while the blast radius
-stays bounded by the mount list. It's still a calculated risk — read-only
-mounts are exfiltration surfaces, and anything in `$PWD` or `~/.claude` is
-writable — but you're now trading "anything on my Mac" for "anything in these
-specific directories."
+**sbx's claude image** runs in bypass-permissions mode by default — no extra
+flags needed. The bounded blast radius comes from the mount list, not from
+permission prompts.
 
 ## Preflight checks
 
@@ -261,12 +323,16 @@ claude -c
 
 - [x] Design locked in
 - [x] Repo bootstrapped with README + CLAUDE.md
-- [ ] `bin/cc` script — parse, plan, preflight, exec phases
-- [ ] First-run verification of the three unknowns: sbx arg-passing syntax,
-      nested-mount handling, `~/.claude` cross-visibility
-- [ ] `cc --cc-doctor` output formatting
+- [x] `bin/cc` script — parse, plan, preflight, exec phases
+- [x] Auto-authentication from macOS Keychain
+- [x] Session history sharing via symlinks
+- [x] Plugin/skill read-only sharing
+- [x] Color-aware TTY pass-through
+- [x] `--cc-dry-run`, `--cc-doctor`, `--cc-ls`, `--cc-rm`, `--cc-no-sandbox`
 - [ ] Manual validation matrix walked through
-- [ ] Install instructions + `brew` / `curl` one-liner
+- [ ] Upstream issue for sbx rapid-call race (currently worked around with 1s sleep)
+- [ ] Homebrew tap / formula (future)
+- [ ] Linux support (untested)
 
 ## License
 

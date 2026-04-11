@@ -6,18 +6,23 @@ This file provides guidance to Claude Code when working in this repository.
 
 `claude-docker-sandbox` ships a single bash script — `cc` — that wraps
 Claude Code invocations in a [Docker Sandbox](https://docs.docker.com/ai/sandboxes/)
-microVM, so `--dangerously-skip-permissions` can be used with a bounded blast
-radius instead of an unbounded one. See [`README.md`](README.md) for
-user-facing documentation.
+microVM, so unsupervised agents have a bounded blast radius instead of an
+unbounded one. See [`README.md`](README.md) for user-facing documentation.
 
 The implementation is intentionally small: one shell script, one config file,
 one README. Resist the urge to grow it into a framework.
+
+**Auth flow:** `cc` extracts the Claude Code token from the macOS Keychain
+(`security find-generic-password -s 'Claude Code-credentials'`) and injects it
+into the sandbox on every invocation via `sbx exec`. Claude inside the sandbox
+runs as user `agent` and looks for credentials at
+`/home/agent/.claude/.credentials.json`.
 
 ## Repository layout
 
 ```
 .
-├── bin/cc                  the wrapper script (not yet written)
+├── bin/cc                  the wrapper script
 ├── README.md               user-facing documentation
 ├── CLAUDE.md               this file
 ├── LICENSE                 MIT
@@ -41,15 +46,77 @@ execution.
    forwarded verbatim to `claude` inside the sandbox.
 2. **Plan.** Run preflight checks. Read `~/.config/cc/mounts.conf` (create it
    from defaults if missing). Apply `--cc-mount` additions and `--cc-no-mount`
-   removals. Compute a deterministic sandbox name from cwd. Build the final
-   `sbx run claude` argv.
-3. **Exec.** Run `sbx run` foregrounded (not `exec`'d), forwarding signals.
-   If sbx exits non-zero with a known mount-overlap error, retry once with the
-   sibling-expansion fallback. Otherwise propagate sbx's exit code.
+   removals. Strip ancestor mounts. Compute a deterministic sandbox name from
+   cwd. Build the final `sbx` argv.
+3. **Exec.** If the named sandbox doesn't exist, create it with
+   `sbx create claude <primary> <mounts>`. Then inject credentials via
+   `sbx exec -i`. Then create sharing symlinks via `sbx exec`. Finally attach
+   with `sbx exec -it <name> env ... claude <claude-args>`, replacing the
+   cc process via `exec`. Propagate sbx's exit code.
 
 The `--cc-dry-run`, `--cc-doctor`, and `--cc-no-sandbox` flags short-circuit
 the exec phase in different ways; they still run parse and the relevant parts
 of plan.
+
+## Lessons from first-run validation
+
+The original design spec had three "unknowns" that live testing resolved:
+
+1. **sbx arg-passing syntax:** `sbx run <sandbox> -- <claude-args>` works, but
+   `sbx run` itself misbehaves with our credential + symlink flow and sends
+   SIGKILL to claude at startup. cc uses `sbx exec` as the attach mechanism
+   instead, losing some of sbx's agent-launcher niceties but gaining reliable
+   exec.
+
+2. **Nested mounts:** sbx accepts overlapping mounts at the parse level but
+   its container-start hooks fail when the cwd's parent directory is under an
+   RO mount (the hook tries to write a CLAUDE.md one level above cwd and hits
+   a read-only filesystem). cc strips any mount that is an ancestor of the
+   current cwd from the resolved mount list as a general rule.
+
+3. **`~/.claude` cross-visibility:** sbx remaps the primary workspace to
+   `/home/agent/workspace` inside the sandbox, and `HOME` is `/home/agent`.
+   The host's `~/.claude` at `/Users/pat/.claude` is not automatically
+   discovered by claude. Solution: mount specific subpaths (`projects`,
+   `plugins`, `skills`) as additional workspaces at their absolute host paths,
+   then symlink `/home/agent/.claude/{projects,plugins,skills}` to those host
+   paths post-create via `sbx exec`. Credentials are injected separately via
+   `sbx exec -i` pipe from `security find-generic-password`.
+
+Additional runtime surprises found during implementation:
+
+4. **sbx rapid-call race:** Running several sbx subcommands back-to-back
+   (`create`, `exec` for inject, `exec` for symlinks, final `exec` to attach)
+   leaves the sbx daemon in a state where the next interactive exec is
+   SIGKILL'd at startup. A 1-second `sleep` before the final attach avoids
+   this. Worth reporting upstream.
+
+5. **`bash -x` leaks secrets:** The first version of `inject_credentials`
+   stored the extracted Keychain token in a shell variable, which `bash -x`
+   would expand and print to stderr. The current version pipes directly from
+   `security` into `sbx exec -i` without an intermediate variable.
+
+6. **TERM/COLORTERM env passthrough:** `sbx exec` does not inherit the host's
+   terminal environment. Claude inside the sandbox defaults to minimal/no-color
+   output unless we explicitly wrap the invocation in `env TERM=... COLORTERM=...`.
+
+Key sbx facts that govern the implementation:
+
+- **Primary workspace path:** sbx remaps the primary workspace to
+  `/home/agent/workspace` inside the container. It does NOT preserve the
+  absolute host path. Additional mounts (e.g. `~/.aws`) DO land at their
+  absolute host paths inside the sandbox.
+- **sbx has no env var flag:** `sbx create` only supports `--branch`,
+  `--memory`, `--name`, `--template`. Credentials and other config must be
+  injected via `sbx exec`.
+- **Bypass mode is the default:** sbx's claude image has
+  `"defaultMode": "bypassPermissions"` pre-configured in
+  `/home/agent/.claude/settings.json`. Do not add any bypass flag as a
+  default in `cc`.
+- **Create vs. attach:** Passing workspace paths to an existing sandbox errors
+  with "sandbox X already exists and can't be given new workspaces". The
+  correct flow: `sbx create claude <primary> <mounts>` once, then
+  `sbx exec` on every subsequent attach.
 
 ## Code style
 
@@ -80,7 +147,7 @@ of plan.
   other parameter (Docker start timeout, sandbox name hash format, preflight
   check list) is hardcoded. If something new needs to change, think twice
   before moving it to config.
-- It is **not a container orchestrator**. It forwards to `sbx run` and lets
+- It is **not a container orchestrator**. It forwards to `sbx` and lets
   sbx own sandbox lifecycle.
 - It is **not a Claude Code replacement**. It wraps the `claude` binary
   without trying to understand its flags, and `claude` is always available
@@ -155,28 +222,6 @@ shfmt -d bin/cc
 
 Install if missing: `brew install shellcheck shfmt`.
 
-## Three first-run unknowns
-
-The design has three places where real sbx behavior needs to be verified on
-first run rather than assumed:
-
-1. **sbx arg-passing syntax.** The plausible guess is
-   `sbx run claude <mounts> -- <claude-args>`. On first run, if `cc -c`
-   doesn't resume a session or `claude` complains about `-c`, inspect
-   `sbx run claude --help` and adjust.
-2. **Nested mount handling.** `$PWD` (RW) sits inside `~/workspace` (RO).
-   Linux bind-mount semantics say the inner mount should shadow the outer on
-   its subpath, but sbx's microVM may or may not pass that through. If
-   rejected, the script retries once with a sibling-expansion fallback (see
-   `bin/cc` plan phase).
-3. **`~/.claude` cross-visibility.** The session-persistence story hinges on
-   `~/.claude` being a live bind mount and cwd resolving to the same absolute
-   path inside the sandbox. Verify by starting a session with host `claude`,
-   exiting, running `cc -c`, and confirming the same session resumes.
-
-If any of these break in a way that can't be patched with a one-line fix,
-open an issue documenting what sbx actually does.
-
 ## Scope discipline
 
 This repo intentionally does one thing. **Do not** add:
@@ -193,3 +238,16 @@ This repo intentionally does one thing. **Do not** add:
 If a change you're considering doesn't fit in a `feat:` or `fix:` commit
 against `bin/cc`, `README.md`, `CLAUDE.md`, or `.gitignore`, it probably
 doesn't belong in this repo.
+
+**Plugin and skill installation:** plugins and skills must be installed on the
+host (`claude` without `cc`), not inside a sandbox. The sandbox mounts
+`~/.claude/plugins` and `~/.claude/skills` read-only to prevent a runaway
+sandbox from injecting malicious code into host-side executable paths. Any
+plugin installed inside a sandbox is lost when the session ends.
+
+- **Do not install plugins or skills from inside a sandbox session.** Plugins
+  and skills are mounted read-only from the host at
+  `/Users/<you>/.claude/plugins` and `/Users/<you>/.claude/skills`. A plugin
+  install from inside the sandbox will either fail or write to a scratch
+  location that vanishes when the sandbox is removed. Install plugins from
+  a host claude session instead (plain `claude`, not via `cc`).
