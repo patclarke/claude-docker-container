@@ -223,6 +223,7 @@ CC_SKIP_MOUNTS=()
 CC_CONFIG_MOUNTS=()
 CC_RESOLVED_MOUNTS=()
 CC_SBX_ARGV=()
+CC_CREATE_ARGV=()
 CLAUDE_ARGS=()
 
 write_default_mounts_file() {
@@ -372,22 +373,64 @@ compute_sandbox_name() {
 	echo "${basename}-${hash}"
 }
 
+sandbox_exists() {
+	local name="$1"
+	sbx ls 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$name"
+}
+
+inject_credentials() {
+	local name="$1" token
+	if ! token="$(security find-generic-password -s 'Claude Code-credentials' -a "$USER" -w 2>/dev/null)"; then
+		echo "cc: no Claude Code credentials in macOS Keychain; sandbox claude may prompt /login" >&2
+		return 0
+	fi
+	printf '%s' "$token" | sbx exec -i "$name" sh -c '
+		mkdir -p /home/agent/.claude &&
+		cat > /home/agent/.claude/.credentials.json &&
+		chmod 600 /home/agent/.claude/.credentials.json
+	' >/dev/null 2>&1 || {
+		echo "cc: failed to inject credentials into sandbox (sandbox may prompt /login)" >&2
+		return 0
+	}
+	return 0
+}
+
+setup_share_symlinks() {
+	local name="$1" home="$HOME"
+	sbx exec "$name" sh -c "
+		[ -d '$home/.claude/projects' ] && {
+			[ -L /home/agent/.claude/projects ] || {
+				rm -rf /home/agent/.claude/projects
+				ln -s '$home/.claude/projects' /home/agent/.claude/projects
+			}
+		}
+		[ -d '$home/.claude/plugins' ] && {
+			[ -L /home/agent/.claude/plugins ] || {
+				rm -rf /home/agent/.claude/plugins
+				ln -s '$home/.claude/plugins' /home/agent/.claude/plugins
+			}
+		}
+		[ -d '$home/.claude/skills' ] && {
+			[ -L /home/agent/.claude/skills ] || {
+				rm -rf /home/agent/.claude/skills
+				ln -s '$home/.claude/skills' /home/agent/.claude/skills
+			}
+		}
+		[ -f '$home/.claude/CLAUDE.md' ] && {
+			[ -L /home/agent/.claude/CLAUDE.md ] || {
+				ln -sf '$home/.claude/CLAUDE.md' /home/agent/.claude/CLAUDE.md
+			}
+		}
+		exit 0
+	" >/dev/null 2>&1 || true
+}
+
 build_sbx_argv() {
-	local name pwd_abs
+	# Always show the attach form (name-only + claude args) — that's what runs in the hot path.
+	local name
 	name="$(compute_sandbox_name)"
-	pwd_abs="$(pwd -P)"
 
-	CC_SBX_ARGV=(sbx run claude --name "$name" "$pwd_abs")
-
-	# Append every resolved mount whose path is not the primary (cwd)
-	local entry path
-	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
-		path="$(mount_path_only "$entry")"
-		if [[ "$path" == "$pwd_abs" ]]; then
-			continue
-		fi
-		CC_SBX_ARGV+=("$entry")
-	done
+	CC_SBX_ARGV=(sbx run "$name")
 
 	if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then
 		CC_SBX_ARGV+=(--)
@@ -395,9 +438,47 @@ build_sbx_argv() {
 	fi
 }
 
+build_create_argv() {
+	# Build the sbx create argv for --cc-dry-run display and actual creation.
+	local name pwd_abs
+	name="$(compute_sandbox_name)"
+	pwd_abs="$(pwd -P)"
+
+	CC_CREATE_ARGV=(sbx create claude "$pwd_abs" --name "$name")
+
+	local entry path
+	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+		path="$(mount_path_only "$entry")"
+		if [[ "$path" == "$pwd_abs" ]]; then
+			continue
+		fi
+		CC_CREATE_ARGV+=("$entry")
+	done
+}
+
 run_sandbox() {
 	build_sbx_argv
+	local name
+	name="$(compute_sandbox_name)"
 
+	# Step 1: create sandbox if it doesn't exist yet
+	if ! sandbox_exists "$name"; then
+		local create_argv=()
+		build_create_argv
+		create_argv=("${CC_CREATE_ARGV[@]}")
+		"${create_argv[@]}" || {
+			echo "cc: failed to create sandbox $name" >&2
+			return 1
+		}
+	fi
+
+	# Step 2: inject credentials (idempotent, refreshes token each run)
+	inject_credentials "$name"
+
+	# Step 3: set up sharing symlinks (idempotent)
+	setup_share_symlinks "$name"
+
+	# Step 4: attach via sbx run NAME -- CLAUDE_ARGS (no workspace args)
 	local sbx_pid rc=0
 	"${CC_SBX_ARGV[@]}" &
 	sbx_pid=$!
