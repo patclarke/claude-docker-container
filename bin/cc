@@ -58,6 +58,13 @@ preflight_docker() {
 	return 0
 }
 
+preflight_sbx_auth() {
+	if ! sbx ls >/dev/null 2>&1; then
+		die "sbx is not authenticated. Run: sbx login"
+	fi
+	return 0
+}
+
 usage() {
 	cat <<'EOF'
 cc — run Claude Code inside a Docker Sandbox microVM
@@ -175,7 +182,8 @@ main() {
 	fi
 	preflight_sbx || return 1
 	preflight_docker || return 1
-	echo "cc $CC_VERSION: preflight OK through docker" >&2
+	preflight_sbx_auth || return 1
+	echo "cc $CC_VERSION: preflight OK through sbx auth" >&2
 	return 0
 }
 
