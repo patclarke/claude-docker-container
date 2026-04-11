@@ -327,6 +327,18 @@ filter_existing_mounts() {
 	CC_RESOLVED_MOUNTS=("${kept[@]+"${kept[@]}"}")
 }
 
+compute_sandbox_name() {
+	if [[ -n "$CC_NAME" ]]; then
+		echo "$CC_NAME"
+		return 0
+	fi
+	local abs basename hash
+	abs="$(pwd -P)"
+	basename="$(basename "$abs")"
+	hash="$(printf '%s' "$abs" | shasum -a 1 | cut -c1-6)"
+	echo "${basename}-${hash}"
+}
+
 parse_args() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -386,7 +398,7 @@ dry_run_output() {
 	load_mounts_config
 	resolve_mounts
 	echo "# cc dry-run"
-	echo "CC_NAME=${CC_NAME:-<derived>}"
+	echo "SANDBOX_NAME=$(compute_sandbox_name)"
 	echo "CC_NO_SANDBOX=${CC_NO_SANDBOX}"
 	echo "RESOLVED_MOUNTS:"
 	local m
