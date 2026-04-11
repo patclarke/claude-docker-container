@@ -3,7 +3,6 @@
 # cc — run Claude Code inside a Docker Sandbox microVM
 # https://github.com/patclarke/claude-docker-sandbox
 
-# shellcheck disable=SC2034
 set -euo pipefail
 
 readonly CC_VERSION="0.1.0"
@@ -213,8 +212,8 @@ run_doctor() {
 }
 
 usage() {
-	cat <<'EOF'
-cc — run Claude Code inside a Docker Sandbox microVM
+	cat <<EOF
+cc $CC_VERSION — run Claude Code inside a Docker Sandbox microVM
 
 USAGE:
     cc [CC_FLAGS] [CLAUDE_ARGS...]
