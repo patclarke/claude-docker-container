@@ -113,9 +113,22 @@ parse_args() {
 	done
 }
 
+dry_run_output() {
+	echo "# cc dry-run"
+	echo "CC_NAME=${CC_NAME:-<derived>}"
+	echo "CC_NO_SANDBOX=${CC_NO_SANDBOX}"
+	echo "CC_EXTRA_MOUNTS=(${CC_EXTRA_MOUNTS[*]:-})"
+	echo "CC_SKIP_MOUNTS=(${CC_SKIP_MOUNTS[*]:-})"
+	echo "CLAUDE_ARGS=(${CLAUDE_ARGS[*]:-})"
+}
+
 main() {
 	parse_args "$@"
-	echo "parsed OK. claude_args=(${CLAUDE_ARGS[*]:-})" >&2
+	if [[ $CC_DRY_RUN -eq 1 ]]; then
+		dry_run_output
+		return 0
+	fi
+	echo "cc $CC_VERSION: plan+exec not yet implemented" >&2
 	return 0
 }
 
