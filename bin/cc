@@ -142,6 +142,26 @@ run_doctor() {
 	fi
 
 	echo
+	echo "Mount plan (from $CC_MOUNTS_FILE):"
+	load_mounts_config
+	resolve_mounts
+	if [[ ${#CC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then
+		echo "  (empty)"
+	else
+		local entry mode path
+		for entry in "${CC_RESOLVED_MOUNTS[@]}"; do
+			if [[ "$entry" == *:ro ]]; then
+				mode="RO"
+				path="${entry%:ro}"
+			else
+				mode="RW"
+				path="$entry"
+			fi
+			printf '  %-3s %s\n' "$mode" "$path"
+		done
+	fi
+
+	echo
 	if ((fails > 0)); then
 		echo "$fails check(s) failed."
 		return 1
