@@ -215,6 +215,7 @@ CC_EXTRA_MOUNTS=()
 CC_SKIP_MOUNTS=()
 CC_CONFIG_MOUNTS=()
 CC_RESOLVED_MOUNTS=()
+CC_SBX_ARGV=()
 CLAUDE_ARGS=()
 
 write_default_mounts_file() {
@@ -339,6 +340,29 @@ compute_sandbox_name() {
 	echo "${basename}-${hash}"
 }
 
+build_sbx_argv() {
+	local name pwd_abs
+	name="$(compute_sandbox_name)"
+	pwd_abs="$(pwd -P)"
+
+	CC_SBX_ARGV=(sbx run claude --name "$name" "$pwd_abs")
+
+	# Append every resolved mount whose path is not the primary (cwd)
+	local entry path
+	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+		path="$(mount_path_only "$entry")"
+		if [[ "$path" == "$pwd_abs" ]]; then
+			continue
+		fi
+		CC_SBX_ARGV+=("$entry")
+	done
+
+	if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then
+		CC_SBX_ARGV+=(--)
+		CC_SBX_ARGV+=("${CLAUDE_ARGS[@]}")
+	fi
+}
+
 parse_args() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -397,6 +421,7 @@ parse_args() {
 dry_run_output() {
 	load_mounts_config
 	resolve_mounts
+	build_sbx_argv
 	echo "# cc dry-run"
 	echo "SANDBOX_NAME=$(compute_sandbox_name)"
 	echo "CC_NO_SANDBOX=${CC_NO_SANDBOX}"
@@ -406,6 +431,9 @@ dry_run_output() {
 		echo "  $m"
 	done
 	echo "CLAUDE_ARGS=(${CLAUDE_ARGS[*]:-})"
+	echo "COMMAND:"
+	printf '  %q ' "${CC_SBX_ARGV[@]}"
+	echo
 }
 
 main() {
