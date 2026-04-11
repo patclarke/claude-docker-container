@@ -194,6 +194,7 @@ CC_RM_NAME=""
 CC_EXTRA_MOUNTS=()
 CC_SKIP_MOUNTS=()
 CC_CONFIG_MOUNTS=()
+CC_RESOLVED_MOUNTS=()
 CLAUDE_ARGS=()
 
 write_default_mounts_file() {
@@ -241,6 +242,57 @@ load_mounts_config() {
 		fi
 		CC_CONFIG_MOUNTS+=("$line")
 	done <"$CC_MOUNTS_FILE"
+}
+
+mount_path_only() {
+	# strip :ro suffix, expand leading ~
+	local entry="$1"
+	local path="${entry%:ro}"
+	# shellcheck disable=SC2088
+	if [[ "$path" == "~/"* ]]; then
+		path="$HOME/${path:2}"
+	elif [[ "$path" == "~" ]]; then
+		path="$HOME"
+	fi
+	echo "$path"
+}
+
+resolve_mounts() {
+	CC_RESOLVED_MOUNTS=("${CC_CONFIG_MOUNTS[@]+"${CC_CONFIG_MOUNTS[@]}"}")
+
+	# Append --cc-mount entries (expand ~)
+	local extra expanded suffix path
+	for extra in "${CC_EXTRA_MOUNTS[@]+"${CC_EXTRA_MOUNTS[@]}"}"; do
+		suffix=""
+		path="$extra"
+		if [[ "$extra" == *:ro ]]; then
+			suffix=":ro"
+			path="${extra%:ro}"
+		fi
+		# shellcheck disable=SC2088
+		if [[ "$path" == "~/"* ]]; then
+			expanded="$HOME/${path:2}$suffix"
+		elif [[ "$path" == "~" ]]; then
+			expanded="$HOME$suffix"
+		else
+			expanded="$path$suffix"
+		fi
+		CC_RESOLVED_MOUNTS+=("$expanded")
+	done
+
+	# Remove --cc-no-mount entries by absolute-path match
+	local skip skip_abs new_list current current_abs
+	for skip in "${CC_SKIP_MOUNTS[@]+"${CC_SKIP_MOUNTS[@]}"}"; do
+		skip_abs="$(mount_path_only "$skip")"
+		new_list=()
+		for current in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+			current_abs="$(mount_path_only "$current")"
+			if [[ "$current_abs" != "$skip_abs" ]]; then
+				new_list+=("$current")
+			fi
+		done
+		CC_RESOLVED_MOUNTS=("${new_list[@]+"${new_list[@]}"}")
+	done
 }
 
 parse_args() {
@@ -300,16 +352,15 @@ parse_args() {
 
 dry_run_output() {
 	load_mounts_config
+	resolve_mounts
 	echo "# cc dry-run"
 	echo "CC_NAME=${CC_NAME:-<derived>}"
 	echo "CC_NO_SANDBOX=${CC_NO_SANDBOX}"
-	echo "CC_CONFIG_MOUNTS:"
+	echo "RESOLVED_MOUNTS:"
 	local m
-	for m in "${CC_CONFIG_MOUNTS[@]+"${CC_CONFIG_MOUNTS[@]}"}"; do
+	for m in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
 		echo "  $m"
 	done
-	echo "CC_EXTRA_MOUNTS=(${CC_EXTRA_MOUNTS[*]:-})"
-	echo "CC_SKIP_MOUNTS=(${CC_SKIP_MOUNTS[*]:-})"
 	echo "CLAUDE_ARGS=(${CLAUDE_ARGS[*]:-})"
 }
 
