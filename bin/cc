@@ -7,7 +7,48 @@ set -euo pipefail
 
 readonly CC_VERSION="0.1.0"
 
+usage() {
+	cat <<'EOF'
+cc — run Claude Code inside a Docker Sandbox microVM
+
+USAGE:
+    cc [CC_FLAGS] [CLAUDE_ARGS...]
+
+WRAPPER FLAGS (consumed by cc, not forwarded):
+    --cc-name <label>       Named sandbox for parallelism
+    --cc-mount <path>[:ro]  Add an extra mount for this invocation (repeatable)
+    --cc-no-mount <path>    Skip a config-file mount for this invocation (repeatable)
+    --cc-no-sandbox         Escape hatch — exec host claude directly
+    --cc-rm [name]          Remove the sandbox for cwd (or the named one)
+    --cc-ls                 List active sandboxes
+    --cc-dry-run            Print the resolved sbx run command, do not exec
+    --cc-doctor             Run preflight checks + show resolved mount list
+    --cc-help, -h           Show this help
+
+Everything else is forwarded to claude inside the sandbox.
+
+EXAMPLES:
+    cc                          # fresh session in cwd
+    cc -c                       # resume most recent session in cwd
+    cc --remote-control -c      # forward arbitrary claude flags
+    cc --cc-name exp-a -c       # named parallel sandbox
+    cc --cc-mount ~/notes:ro    # ad-hoc extra mount
+    cc --cc-no-sandbox -c       # bypass the sandbox entirely
+
+CONFIG:
+    ~/.config/cc/mounts.conf    Durable mount policy (created on first run)
+EOF
+}
+
 main() {
+	if [[ $# -gt 0 ]]; then
+		case "$1" in
+		--cc-help | -h)
+			usage
+			return 0
+			;;
+		esac
+	fi
 	echo "cc $CC_VERSION: not yet implemented" >&2
 	return 0
 }
