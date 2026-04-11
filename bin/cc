@@ -14,84 +14,137 @@ die() {
 }
 
 preflight_sbx() {
-	if ! command -v sbx >/dev/null 2>&1; then
+	command -v sbx >/dev/null 2>&1
+}
+
+preflight_docker() {
+	docker info >/dev/null 2>&1 && docker ps >/dev/null 2>&1
+}
+
+preflight_sbx_auth() {
+	sbx ls >/dev/null 2>&1
+}
+
+preflight_claude_dir() {
+	[[ -d "$HOME/.claude" && -w "$HOME/.claude" ]]
+}
+
+preflight_claude_binary() {
+	command -v claude >/dev/null 2>&1
+}
+
+die_preflight() {
+	case "$1" in
+	sbx)
 		cat >&2 <<'EOF'
 cc: sbx not found on PATH.
     Install:   brew install docker/tap/sbx
     Then run:  sbx login
 EOF
-		return 1
-	fi
-	return 0
+		;;
+	docker)
+		echo "cc: Docker Desktop is not responding. Run 'docker info' to debug." >&2
+		;;
+	sbx_auth)
+		echo "cc: sbx is not authenticated. Run: sbx login" >&2
+		;;
+	claude_dir)
+		echo "cc: $HOME/.claude is missing or not writable. Session history would be lost." >&2
+		;;
+	claude_binary)
+		echo "cc: claude binary not found on PATH." >&2
+		;;
+	esac
+	return 1
 }
 
-preflight_docker() {
+ensure_docker_running() {
 	if docker info >/dev/null 2>&1; then
 		return 0
 	fi
-
 	echo "cc: Docker Desktop is not running. Starting it..." >&2
-	if ! open -a Docker 2>/dev/null; then
-		die "failed to launch Docker Desktop (open -a Docker). Start it manually, then re-run cc."
-	fi
-
+	open -a Docker 2>/dev/null || die "failed to launch Docker Desktop."
 	local waited=0
-	local max_wait=30
-	while ((waited < max_wait)); do
+	while ((waited < 30)); do
 		if docker info >/dev/null 2>&1; then
-			break
+			echo >&2
+			return 0
 		fi
 		sleep 1
 		waited=$((waited + 1))
 		printf '.' >&2
 	done
 	echo >&2
-
-	if ! docker info >/dev/null 2>&1; then
-		die "Docker Desktop failed to start within ${max_wait}s. Open it manually, wait for the whale icon to settle, then re-run cc."
-	fi
-
-	if ! docker ps >/dev/null 2>&1; then
-		die "Docker Desktop is responding but the daemon is not ready (docker ps failed). Wait a few seconds and retry."
-	fi
-
-	return 0
-}
-
-preflight_sbx_auth() {
-	if ! sbx ls >/dev/null 2>&1; then
-		die "sbx is not authenticated. Run: sbx login"
-	fi
-	return 0
-}
-
-preflight_claude_dir() {
-	local dir="$HOME/.claude"
-	if [[ ! -d "$dir" ]]; then
-		die "$HOME/.claude does not exist. Install or run Claude Code at least once before using cc."
-	fi
-	if [[ ! -w "$dir" ]]; then
-		die "$HOME/.claude is not writable. Session history would be lost. Check ownership/permissions."
-	fi
-	return 0
-}
-
-preflight_claude_binary() {
-	if ! command -v claude >/dev/null 2>&1; then
-		die "claude binary not found on PATH. Install Claude Code and ensure it is on PATH."
-	fi
-	return 0
+	die "Docker Desktop failed to start within 30s."
 }
 
 run_preflight() {
 	if [[ $CC_NO_SANDBOX -eq 1 ]]; then
-		preflight_claude_binary || return 1
+		preflight_claude_binary || die_preflight claude_binary
 		return 0
 	fi
-	preflight_sbx || return 1
-	preflight_docker || return 1
-	preflight_sbx_auth || return 1
-	preflight_claude_dir || return 1
+	preflight_sbx || die_preflight sbx
+	ensure_docker_running
+	preflight_docker || die_preflight docker
+	preflight_sbx_auth || die_preflight sbx_auth
+	preflight_claude_dir || die_preflight claude_dir
+	return 0
+}
+
+print_check() {
+	local state="$1" label="$2"
+	case "$state" in
+	OK) printf '  \033[32mOK\033[0m    %s\n' "$label" ;;
+	WARN) printf '  \033[33mWARN\033[0m  %s\n' "$label" ;;
+	FAIL) printf '  \033[31mFAIL\033[0m  %s\n' "$label" ;;
+	esac
+}
+
+run_doctor() {
+	local fails=0
+	echo "cc doctor"
+	echo
+
+	if preflight_sbx; then
+		print_check OK "sbx installed"
+	else
+		print_check FAIL "sbx installed    (brew install docker/tap/sbx)"
+		fails=$((fails + 1))
+	fi
+
+	if preflight_docker; then
+		print_check OK "Docker Desktop running"
+	else
+		print_check FAIL "Docker Desktop running    (open -a Docker)"
+		fails=$((fails + 1))
+	fi
+
+	if preflight_sbx_auth; then
+		print_check OK "sbx authenticated"
+	else
+		print_check FAIL "sbx authenticated    (sbx login)"
+		fails=$((fails + 1))
+	fi
+
+	if preflight_claude_dir; then
+		print_check OK "$HOME/.claude is writable"
+	else
+		print_check FAIL "$HOME/.claude is writable    (check permissions)"
+		fails=$((fails + 1))
+	fi
+
+	if preflight_claude_binary; then
+		print_check OK "claude installed on host (escape hatch available)"
+	else
+		print_check WARN "claude not on host    (--cc-no-sandbox will fail)"
+	fi
+
+	echo
+	if ((fails > 0)); then
+		echo "$fails check(s) failed."
+		return 1
+	fi
+	echo "All checks passed."
 	return 0
 }
 
@@ -206,6 +259,10 @@ dry_run_output() {
 
 main() {
 	parse_args "$@"
+	if [[ $CC_DOCTOR -eq 1 ]]; then
+		run_doctor
+		return $?
+	fi
 	if [[ $CC_DRY_RUN -eq 1 ]]; then
 		dry_run_output
 		return 0
