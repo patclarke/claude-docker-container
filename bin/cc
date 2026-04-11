@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#
+# cc — run Claude Code inside a Docker Sandbox microVM
+# https://github.com/patclarke/claude-docker-sandbox
+
+set -euo pipefail
+
+readonly CC_VERSION="0.1.0"
+
+main() {
+	echo "cc $CC_VERSION: not yet implemented" >&2
+	return 0
+}
+
+main "$@"
