@@ -422,15 +422,27 @@ dry_run_output() {
 	load_mounts_config
 	resolve_mounts
 	build_sbx_argv
+
+	local pwd_abs
+	pwd_abs="$(pwd -P)"
+
 	echo "# cc dry-run"
+	echo "CWD=$pwd_abs"
 	echo "SANDBOX_NAME=$(compute_sandbox_name)"
-	echo "CC_NO_SANDBOX=${CC_NO_SANDBOX}"
-	echo "RESOLVED_MOUNTS:"
-	local m
-	for m in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
-		echo "  $m"
-	done
-	echo "CLAUDE_ARGS=(${CLAUDE_ARGS[*]:-})"
+	echo "NO_SANDBOX=$CC_NO_SANDBOX"
+	echo
+	echo "MOUNTS (resolved, existing only):"
+	if [[ ${#CC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then
+		echo "  (none)"
+	else
+		local m
+		for m in "${CC_RESOLVED_MOUNTS[@]}"; do
+			echo "  $m"
+		done
+	fi
+	echo
+	echo "CLAUDE_ARGS: ${CLAUDE_ARGS[*]:-<none>}"
+	echo
 	echo "COMMAND:"
 	printf '  %q ' "${CC_SBX_ARGV[@]}"
 	echo
