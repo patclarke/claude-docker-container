@@ -293,6 +293,18 @@ resolve_mounts() {
 		done
 		CC_RESOLVED_MOUNTS=("${new_list[@]+"${new_list[@]}"}")
 	done
+	filter_existing_mounts
+}
+
+filter_existing_mounts() {
+	local kept=() entry path
+	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+		path="$(mount_path_only "$entry")"
+		if [[ -e "$path" ]]; then
+			kept+=("$entry")
+		fi
+	done
+	CC_RESOLVED_MOUNTS=("${kept[@]+"${kept[@]}"}")
 }
 
 parse_args() {
