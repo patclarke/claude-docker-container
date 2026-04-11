@@ -50,50 +50,73 @@ execution.
    cwd. Build the final `sbx` argv.
 3. **Exec.** If the named sandbox doesn't exist, create it with
    `sbx create claude <primary> <mounts>`. Then inject credentials via
-   `sbx exec`. Then create sharing symlinks via `sbx exec`. Finally attach
-   with `sbx run <name> -- <claude-args>`, foregrounded with signal forwarding.
-   Propagate sbx's exit code.
+   `sbx exec -i`. Then create sharing symlinks via `sbx exec`. Finally attach
+   with `sbx exec -it <name> env ... claude <claude-args>`, replacing the
+   cc process via `exec`. Propagate sbx's exit code.
 
 The `--cc-dry-run`, `--cc-doctor`, and `--cc-no-sandbox` flags short-circuit
 the exec phase in different ways; they still run parse and the relevant parts
 of plan.
 
-## Key sbx behaviors (verified in live testing)
+## Lessons from first-run validation
 
-These were the three first-run unknowns from the original design. All are now
-resolved:
+The original design spec had three "unknowns" that live testing resolved:
 
-1. **Primary workspace path.** sbx remaps the primary workspace to
-   `/home/agent/workspace` inside the container. It does NOT preserve the
-   absolute host path for the primary mount. Additional mounts (e.g. `~/.aws`)
-   DO land at their absolute host paths inside the sandbox.
+1. **sbx arg-passing syntax:** `sbx run <sandbox> -- <claude-args>` works, but
+   `sbx run` itself misbehaves with our credential + symlink flow and sends
+   SIGKILL to claude at startup. cc uses `sbx exec` as the attach mechanism
+   instead, losing some of sbx's agent-launcher niceties but gaining reliable
+   exec.
 
-2. **Nested mounts fail.** When cwd is inside `~/workspace` and both are
-   mounted, sbx's container-start hook tries to chown the cwd's parent
-   directory (inside the RO parent mount) and fails with "Read-only file
-   system". Fix: `strip_cwd_ancestors` removes any mount that is a strict
-   ancestor of `$PWD` before passing the list to sbx.
+2. **Nested mounts:** sbx accepts overlapping mounts at the parse level but
+   its container-start hooks fail when the cwd's parent directory is under an
+   RO mount (the hook tries to write a CLAUDE.md one level above cwd and hits
+   a read-only filesystem). cc strips any mount that is an ancestor of the
+   current cwd from the resolved mount list as a general rule.
 
-3. **Auth.** Claude inside the sandbox runs as user `agent` with
-   `HOME=/home/agent`. It looks for credentials at
-   `/home/agent/.claude/.credentials.json`. A bind mount of `~/.claude` at its
-   absolute host path doesn't help because sbx has no env var flag to remap
-   `$HOME`. Fix: `inject_credentials` extracts the token from the macOS
-   Keychain non-interactively and writes it to the correct path via `sbx exec`.
+3. **`~/.claude` cross-visibility:** sbx remaps the primary workspace to
+   `/home/agent/workspace` inside the sandbox, and `HOME` is `/home/agent`.
+   The host's `~/.claude` at `/Users/pat/.claude` is not automatically
+   discovered by claude. Solution: mount specific subpaths (`projects`,
+   `plugins`, `skills`) as additional workspaces at their absolute host paths,
+   then symlink `/home/agent/.claude/{projects,plugins,skills}` to those host
+   paths post-create via `sbx exec`. Credentials are injected separately via
+   `sbx exec -i` pipe from `security find-generic-password`.
 
-4. **sbx has no env var flag.** `sbx run --help` only supports `--branch`,
-   `--memory`, `--name`, `--template`. There is no way to pass env vars via
-   sbx. Credentials and other config must be injected via `sbx exec`.
+Additional runtime surprises found during implementation:
 
-5. **Bypass mode is the default.** sbx's claude image has
-   `"defaultMode": "bypassPermissions"` pre-configured in
-   `/home/agent/.claude/settings.json`. Do not add any bypass flag as a
-   default in `cc`.
+4. **sbx rapid-call race:** Running several sbx subcommands back-to-back
+   (`create`, `exec` for inject, `exec` for symlinks, final `exec` to attach)
+   leaves the sbx daemon in a state where the next interactive exec is
+   SIGKILL'd at startup. A 1-second `sleep` before the final attach avoids
+   this. Worth reporting upstream.
 
-6. **Create vs. attach.** Passing workspace paths to an existing sandbox errors
-   with "sandbox X already exists and can't be given new workspaces". The
-   correct flow: `sbx create claude <primary> <mounts>` once, then
-   `sbx run <name>` on every subsequent attach.
+5. **`bash -x` leaks secrets:** The first version of `inject_credentials`
+   stored the extracted Keychain token in a shell variable, which `bash -x`
+   would expand and print to stderr. The current version pipes directly from
+   `security` into `sbx exec -i` without an intermediate variable.
+
+6. **TERM/COLORTERM env passthrough:** `sbx exec` does not inherit the host's
+   terminal environment. Claude inside the sandbox defaults to minimal/no-color
+   output unless we explicitly wrap the invocation in `env TERM=... COLORTERM=...`.
+
+Key sbx facts that govern the implementation:
+
+- **Primary workspace path:** sbx remaps the primary workspace to
+  `/home/agent/workspace` inside the container. It does NOT preserve the
+  absolute host path. Additional mounts (e.g. `~/.aws`) DO land at their
+  absolute host paths inside the sandbox.
+- **sbx has no env var flag:** `sbx create` only supports `--branch`,
+  `--memory`, `--name`, `--template`. Credentials and other config must be
+  injected via `sbx exec`.
+- **Bypass mode is the default:** sbx's claude image has
+  `"defaultMode": "bypassPermissions"` pre-configured in
+  `/home/agent/.claude/settings.json`. Do not add any bypass flag as a
+  default in `cc`.
+- **Create vs. attach:** Passing workspace paths to an existing sandbox errors
+  with "sandbox X already exists and can't be given new workspaces". The
+  correct flow: `sbx create claude <primary> <mounts>` once, then
+  `sbx exec` on every subsequent attach.
 
 ## Code style
 
@@ -221,3 +244,10 @@ host (`claude` without `cc`), not inside a sandbox. The sandbox mounts
 `~/.claude/plugins` and `~/.claude/skills` read-only to prevent a runaway
 sandbox from injecting malicious code into host-side executable paths. Any
 plugin installed inside a sandbox is lost when the session ends.
+
+- **Do not install plugins or skills from inside a sandbox session.** Plugins
+  and skills are mounted read-only from the host at
+  `/Users/<you>/.claude/plugins` and `/Users/<you>/.claude/skills`. A plugin
+  install from inside the sandbox will either fail or write to a scratch
+  location that vanishes when the sandbox is removed. Install plugins from
+  a host claude session instead (plain `claude`, not via `cc`).

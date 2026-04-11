@@ -23,9 +23,8 @@ you explicitly mount in.
   for ad-hoc file sharing)
 - Shares `~/.claude/projects` **read-write** so sessions persist across runs
   and are visible from both host `claude` and sandboxed `cc`
-- Shares `~/.claude/plugins`, `~/.claude/skills`, and `~/.claude/CLAUDE.md`
-  **read-only** so your tools and config are available without letting a sandbox
-  session tamper with them
+- Shares `~/.claude/plugins` and `~/.claude/skills` **read-only** so your
+  tools are available without letting a sandbox session tamper with them
 - Shares `~/.aws`, `~/.config/gh`, and `~/.ssh` **read-only** so credentials
   work without letting the agent overwrite them
 - Auto-injects your Claude Code credentials from the macOS Keychain on every
@@ -60,15 +59,29 @@ you explicitly mount in.
 
 ## Install
 
-> Not yet available. Install instructions will land here once the `cc` script
-> ships. Planned form:
->
-> ```console
-> curl -fsSL https://raw.githubusercontent.com/patclarke/claude-docker-sandbox/main/bin/cc -o ~/bin/cc
-> chmod +x ~/bin/cc
-> # make sure ~/bin is on PATH
-> cc --cc-doctor
-> ```
+macOS only for now. Linux may work but is untested.
+
+```console
+# Prerequisites: Docker Desktop + sbx CLI
+brew install docker/tap/sbx
+sbx login
+
+# Install cc to ~/bin
+mkdir -p ~/bin
+curl -fsSL https://raw.githubusercontent.com/patclarke/claude-docker-sandbox/main/bin/cc -o ~/bin/cc
+chmod +x ~/bin/cc
+
+# Ensure ~/bin is on PATH (zsh; adapt for your shell)
+grep -q 'export PATH="$HOME/bin:$PATH"' ~/.zshrc || \
+    echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+exec zsh -l
+
+# Verify
+cc --cc-doctor
+```
+
+The first run of `cc` in a project directory creates `~/.config/cc/mounts.conf`
+with default mounts. Edit that file to change what gets shared with the sandbox.
 
 ## Usage
 
@@ -168,9 +181,10 @@ Written automatically the first time you run `cc`:
 ~/.claude/projects
 
 # Claude Code code/config (RO — prevents a runaway sandbox from tampering with host plugins/skills)
+# Note: sbx only accepts directories as additional workspaces, so user-level
+# ~/.claude/CLAUDE.md is not shared. Project-level CLAUDE.md in the cwd mount still applies.
 ~/.claude/plugins:ro
 ~/.claude/skills:ro
-~/.claude/CLAUDE.md:ro
 
 # Credentials (RO — read by cc on the host, injected into the sandbox via sbx exec)
 ~/.aws:ro
@@ -189,7 +203,6 @@ Written automatically the first time you run `cc`:
 | `~/.claude/projects`    | RW   | Session persistence; host ↔ sandbox visibility                 |
 | `~/.claude/plugins`     | RO   | Host plugins available in sandbox; sandbox cannot modify them  |
 | `~/.claude/skills`      | RO   | Host skills available in sandbox; sandbox cannot modify them   |
-| `~/.claude/CLAUDE.md`   | RO   | Global Claude instructions; sandbox cannot modify them         |
 | `~/.aws`                | RO   | Credentials available to code running in the sandbox           |
 | `~/.config/gh`          | RO   | `gh` CLI auth                                                  |
 | `~/.ssh`                | RO   | git over ssh                                                   |
@@ -311,14 +324,15 @@ claude -c
 - [x] Design locked in
 - [x] Repo bootstrapped with README + CLAUDE.md
 - [x] `bin/cc` script — parse, plan, preflight, exec phases
-- [x] Live sandbox testing: sbx arg syntax, mount model, and auth all resolved
-  - sbx primary workspace remapped to `/home/agent/workspace` (not absolute path)
-  - Nested mounts cause chown failures — fixed via ancestor stripping
-  - Claude runs as `agent`; credentials injected from macOS Keychain via `sbx exec`
-  - Session/plugin/skill sharing works via symlinks from `/home/agent/.claude/*`
-- [x] `cc --cc-doctor` output formatting
-- [ ] Manual validation matrix walked through end-to-end
-- [ ] Install instructions + `brew` / `curl` one-liner
+- [x] Auto-authentication from macOS Keychain
+- [x] Session history sharing via symlinks
+- [x] Plugin/skill read-only sharing
+- [x] Color-aware TTY pass-through
+- [x] `--cc-dry-run`, `--cc-doctor`, `--cc-ls`, `--cc-rm`, `--cc-no-sandbox`
+- [ ] Manual validation matrix walked through
+- [ ] Upstream issue for sbx rapid-call race (currently worked around with 1s sleep)
+- [ ] Homebrew tap / formula (future)
+- [ ] Linux support (untested)
 
 ## License
 
