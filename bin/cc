@@ -102,6 +102,14 @@ print_check() {
 	esac
 }
 
+run_ls() {
+	preflight_sbx || die_preflight sbx
+	ensure_docker_running
+	preflight_sbx_auth || die_preflight sbx_auth
+	echo "# active sbx sandboxes"
+	sbx ls
+}
+
 run_doctor() {
 	local fails=0
 	echo "cc doctor"
@@ -598,6 +606,10 @@ main() {
 	parse_args "$@"
 	if [[ $CC_DOCTOR -eq 1 ]]; then
 		run_doctor
+		return $?
+	fi
+	if [[ $CC_LS -eq 1 ]]; then
+		run_ls
 		return $?
 	fi
 	if [[ $CC_DRY_RUN -eq 1 ]]; then
