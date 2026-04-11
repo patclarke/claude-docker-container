@@ -21,10 +21,10 @@ Claude started asking me better follow-up questions. Instead of reflexive
 approvals, I was actually thinking again, and I realized I could be OK with
 dangerous mode — *if the blast radius was physically bounded*.
 
-My day job touches a lot of AWS infrastructure and GitHub. If an agent goes
-off the rails and `aws s3 rb` the wrong bucket, or force-pushes `main`, I
-have a bad week. I wanted dangerous mode's velocity *and* a hard guarantee
-that certain kinds of damage were impossible.
+A lot of my side project work involves AWS infrastructure and GitHub. If an
+agent goes off the rails and `aws s3 rb` the wrong bucket, or force-pushes
+`main`, I have a bad week. I wanted dangerous mode's velocity *and* a hard
+guarantee that certain kinds of damage were impossible.
 
 That's what `cc` is.
 
