@@ -3,9 +3,15 @@
 # cc — run Claude Code inside a Docker Sandbox microVM
 # https://github.com/patclarke/claude-docker-sandbox
 
+# shellcheck disable=SC2034
 set -euo pipefail
 
 readonly CC_VERSION="0.1.0"
+
+die() {
+	echo "cc: $*" >&2
+	exit 1
+}
 
 usage() {
 	cat <<'EOF'
@@ -40,16 +46,76 @@ CONFIG:
 EOF
 }
 
-main() {
-	if [[ $# -gt 0 ]]; then
+# Parser state — populated by parse_args
+CC_NAME=""
+CC_NO_SANDBOX=0
+CC_DRY_RUN=0
+CC_DOCTOR=0
+CC_LS=0
+CC_RM=0
+CC_RM_NAME=""
+CC_EXTRA_MOUNTS=()
+CC_SKIP_MOUNTS=()
+CLAUDE_ARGS=()
+
+parse_args() {
+	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--cc-help | -h)
 			usage
-			return 0
+			exit 0
+			;;
+		--cc-name)
+			[[ $# -ge 2 ]] || die "--cc-name requires a value"
+			CC_NAME="$2"
+			shift 2
+			;;
+		--cc-mount)
+			[[ $# -ge 2 ]] || die "--cc-mount requires a <path>[:ro] value"
+			CC_EXTRA_MOUNTS+=("$2")
+			shift 2
+			;;
+		--cc-no-mount)
+			[[ $# -ge 2 ]] || die "--cc-no-mount requires a path"
+			CC_SKIP_MOUNTS+=("$2")
+			shift 2
+			;;
+		--cc-no-sandbox)
+			CC_NO_SANDBOX=1
+			shift
+			;;
+		--cc-dry-run)
+			CC_DRY_RUN=1
+			shift
+			;;
+		--cc-doctor)
+			CC_DOCTOR=1
+			shift
+			;;
+		--cc-ls)
+			CC_LS=1
+			shift
+			;;
+		--cc-rm)
+			CC_RM=1
+			if [[ $# -ge 2 && "$2" != -* ]]; then
+				CC_RM_NAME="$2"
+				shift 2
+			else
+				shift
+			fi
+			;;
+		*)
+			CLAUDE_ARGS+=("$1")
+			shift
 			;;
 		esac
-	fi
-	echo "cc $CC_VERSION: not yet implemented" >&2
+	done
+}
+
+main() {
+	parse_args "$@"
+	echo "parsed OK. claude_args=(${CLAUDE_ARGS[*]:-})" >&2
 	return 0
 }
 
