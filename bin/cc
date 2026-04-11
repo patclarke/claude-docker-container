@@ -161,6 +161,13 @@ run_doctor() {
 		done
 	fi
 
+	# shellcheck disable=SC2088
+	if [[ -f "$CC_MOUNTS_FILE" ]] && ! grep -q '~/\.claude/projects' "$CC_MOUNTS_FILE"; then
+		echo
+		echo "WARN: ~/.config/cc/mounts.conf looks out of date (missing ~/.claude/projects)."
+		echo "      Consider deleting it to regenerate with current defaults."
+	fi
+
 	echo
 	if ((fails > 0)); then
 		echo "$fails check(s) failed."
@@ -226,18 +233,27 @@ write_default_mounts_file() {
 # No suffix = read-write. ":ro" = read-only.
 # Non-existent paths are skipped silently at launch.
 
-# Cross-project reference (read-only view of sibling repos)
+# Cross-project reference (read-only view of sibling repos).
+# cc automatically strips any mount that's an ancestor of $PWD, so
+# this is safe even when cwd is inside ~/workspace.
 ~/workspace:ro
 
 # Ad-hoc file sharing from normal macOS locations
 ~/Desktop:ro
 ~/Downloads:ro
 
-# Host config surfaced into the sandbox
-~/.claude                 # RW — session persistence + plugins/skills
-~/.aws:ro                 # AWS credentials read-only
-~/.config/gh:ro           # gh CLI auth read-only
-~/.ssh:ro                 # git over ssh read-only
+# Claude Code session sharing (RW — sessions from host visible in sandbox and vice versa)
+~/.claude/projects
+
+# Claude Code code/config (RO — prevents a runaway sandbox from tampering with host plugins/skills)
+~/.claude/plugins:ro
+~/.claude/skills:ro
+~/.claude/CLAUDE.md:ro
+
+# Credentials (RO — read by cc on the host, injected into the sandbox via sbx exec)
+~/.aws:ro
+~/.config/gh:ro
+~/.ssh:ro
 EOF
 	echo "cc: created $CC_MOUNTS_FILE with defaults." >&2
 }
@@ -315,6 +331,7 @@ resolve_mounts() {
 		CC_RESOLVED_MOUNTS=("${new_list[@]+"${new_list[@]}"}")
 	done
 	filter_existing_mounts
+	strip_cwd_ancestors
 }
 
 filter_existing_mounts() {
@@ -324,6 +341,21 @@ filter_existing_mounts() {
 		if [[ -e "$path" ]]; then
 			kept+=("$entry")
 		fi
+	done
+	CC_RESOLVED_MOUNTS=("${kept[@]+"${kept[@]}"}")
+}
+
+strip_cwd_ancestors() {
+	local pwd_abs kept=() entry path
+	pwd_abs="$(pwd -P)"
+	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+		path="$(mount_path_only "$entry")"
+		# Strip if cwd is strictly UNDER this mount (ancestor). Equal is fine — that's the primary.
+		if [[ "$pwd_abs" == "$path"/* && "$pwd_abs" != "$path" ]]; then
+			echo "cc: stripping ancestor mount $path (cwd is inside it)" >&2
+			continue
+		fi
+		kept+=("$entry")
 	done
 	CC_RESOLVED_MOUNTS=("${kept[@]+"${kept[@]}"}")
 }
