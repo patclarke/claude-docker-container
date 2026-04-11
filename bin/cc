@@ -363,6 +363,22 @@ build_sbx_argv() {
 	fi
 }
 
+run_sandbox() {
+	build_sbx_argv
+
+	local sbx_pid rc=0
+	"${CC_SBX_ARGV[@]}" &
+	sbx_pid=$!
+
+	# Forward common signals to the child
+	trap 'kill -s INT "$sbx_pid" 2>/dev/null || true' INT
+	trap 'kill -s TERM "$sbx_pid" 2>/dev/null || true' TERM
+
+	wait "$sbx_pid" || rc=$?
+	trap - INT TERM
+	return "$rc"
+}
+
 parse_args() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -459,8 +475,10 @@ main() {
 		return 0
 	fi
 	run_preflight || return 1
-	echo "cc $CC_VERSION: preflight OK (no_sandbox=$CC_NO_SANDBOX)" >&2
-	return 0
+	load_mounts_config
+	resolve_mounts
+	run_sandbox
+	return $?
 }
 
 main "$@"
