@@ -397,6 +397,10 @@ inject_credentials() {
 
 setup_share_symlinks() {
 	local name="$1" home="$HOME"
+	# Redirect stdin from /dev/null so this sbx exec doesn't steal cc's stdin.
+	# Without the redirect, sbx exec inherits cc's stdin and consumes it, which
+	# leaves the final `sbx exec -i ... claude` attach with no stdin and claude
+	# gets SIGKILL'd (exit 137).
 	sbx exec "$name" sh -c "
 		[ -d '$home/.claude/projects' ] && {
 			[ -L /home/agent/.claude/projects ] || {
@@ -417,7 +421,7 @@ setup_share_symlinks() {
 			}
 		}
 		exit 0
-	" >/dev/null 2>&1 || true
+	" </dev/null >/dev/null 2>&1 || true
 }
 
 build_sbx_argv() {
@@ -480,12 +484,17 @@ run_sandbox() {
 	# Step 3: set up sharing symlinks (idempotent)
 	setup_share_symlinks "$name"
 
-	# Step 4: attach to sandbox via sbx exec, running claude in foreground.
-	# Do NOT background-and-wait — sbx exec needs connected stdin/stdout/stderr
-	# to pass through to claude, and the `&` + `wait` pattern can sever stdio.
-	# Signal handling: bash in foreground-exec mode forwards SIGINT/SIGTERM
-	# to the child as long as the child is the only process in the job.
-	"${CC_SBX_ARGV[@]}"
+	# sbx race workaround: rapid successive sbx calls (create, exec for inject,
+	# exec for symlinks, then exec for attach) leave the sbx daemon in a state
+	# where the interactive attach is SIGKILL'd at startup (exit 137). A brief
+	# pause before the attach lets the daemon settle. 1s is sufficient in
+	# practice; under 1s is unreliable.
+	sleep 1
+
+	# Step 4: exec into sbx exec so cc's process becomes sbx exec entirely.
+	# Using `exec` avoids any parent-child stdio/signal layering issues
+	# between cc and the attach command.
+	exec "${CC_SBX_ARGV[@]}"
 }
 
 parse_args() {
