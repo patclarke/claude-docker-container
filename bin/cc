@@ -65,6 +65,17 @@ preflight_sbx_auth() {
 	return 0
 }
 
+preflight_claude_dir() {
+	local dir="$HOME/.claude"
+	if [[ ! -d "$dir" ]]; then
+		die "$HOME/.claude does not exist. Install or run Claude Code at least once before using cc."
+	fi
+	if [[ ! -w "$dir" ]]; then
+		die "$HOME/.claude is not writable. Session history would be lost. Check ownership/permissions."
+	fi
+	return 0
+}
+
 usage() {
 	cat <<'EOF'
 cc — run Claude Code inside a Docker Sandbox microVM
@@ -183,7 +194,8 @@ main() {
 	preflight_sbx || return 1
 	preflight_docker || return 1
 	preflight_sbx_auth || return 1
-	echo "cc $CC_VERSION: preflight OK through sbx auth" >&2
+	preflight_claude_dir || return 1
+	echo "cc $CC_VERSION: preflight OK" >&2
 	return 0
 }
 
