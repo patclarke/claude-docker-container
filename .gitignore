@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+._*
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+
+# Git worktrees
+.worktrees/
