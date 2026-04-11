@@ -55,7 +55,7 @@ EOF
 		echo "cc: claude binary not found on PATH." >&2
 		;;
 	esac
-	return 1
+	exit 1
 }
 
 ensure_docker_running() {
