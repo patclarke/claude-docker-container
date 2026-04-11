@@ -7,6 +7,8 @@
 set -euo pipefail
 
 readonly CC_VERSION="0.1.0"
+readonly CC_CONFIG_DIR="$HOME/.config/cc"
+readonly CC_MOUNTS_FILE="$CC_CONFIG_DIR/mounts.conf"
 
 die() {
 	echo "cc: $*" >&2
@@ -191,7 +193,55 @@ CC_RM=0
 CC_RM_NAME=""
 CC_EXTRA_MOUNTS=()
 CC_SKIP_MOUNTS=()
+CC_CONFIG_MOUNTS=()
 CLAUDE_ARGS=()
+
+write_default_mounts_file() {
+	mkdir -p "$CC_CONFIG_DIR"
+	cat >"$CC_MOUNTS_FILE" <<'EOF'
+# cc mounts config
+# Format:  <path>[:ro]
+# No suffix = read-write. ":ro" = read-only.
+# Non-existent paths are skipped silently at launch.
+
+# Cross-project reference (read-only view of sibling repos)
+~/workspace:ro
+
+# Ad-hoc file sharing from normal macOS locations
+~/Desktop:ro
+~/Downloads:ro
+
+# Host config surfaced into the sandbox
+~/.claude                 # RW — session persistence + plugins/skills
+~/.aws:ro                 # AWS credentials read-only
+~/.config/gh:ro           # gh CLI auth read-only
+~/.ssh:ro                 # git over ssh read-only
+EOF
+	echo "cc: created $CC_MOUNTS_FILE with defaults." >&2
+}
+
+load_mounts_config() {
+	if [[ ! -f "$CC_MOUNTS_FILE" ]]; then
+		write_default_mounts_file
+	fi
+	CC_CONFIG_MOUNTS=()
+	local line
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		# strip inline comments and trailing whitespace
+		line="${line%%#*}"
+		line="${line%"${line##*[![:space:]]}"}"
+		line="${line#"${line%%[![:space:]]*}"}"
+		[[ -z "$line" ]] && continue
+		# expand leading ~
+		# shellcheck disable=SC2088
+		if [[ "$line" == "~/"* ]]; then
+			line="$HOME/${line:2}"
+		elif [[ "$line" == "~" ]]; then
+			line="$HOME"
+		fi
+		CC_CONFIG_MOUNTS+=("$line")
+	done <"$CC_MOUNTS_FILE"
+}
 
 parse_args() {
 	while [[ $# -gt 0 ]]; do
@@ -249,9 +299,15 @@ parse_args() {
 }
 
 dry_run_output() {
+	load_mounts_config
 	echo "# cc dry-run"
 	echo "CC_NAME=${CC_NAME:-<derived>}"
 	echo "CC_NO_SANDBOX=${CC_NO_SANDBOX}"
+	echo "CC_CONFIG_MOUNTS:"
+	local m
+	for m in "${CC_CONFIG_MOUNTS[@]+"${CC_CONFIG_MOUNTS[@]}"}"; do
+		echo "  $m"
+	done
 	echo "CC_EXTRA_MOUNTS=(${CC_EXTRA_MOUNTS[*]:-})"
 	echo "CC_SKIP_MOUNTS=(${CC_SKIP_MOUNTS[*]:-})"
 	echo "CLAUDE_ARGS=(${CLAUDE_ARGS[*]:-})"
