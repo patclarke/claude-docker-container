@@ -97,10 +97,12 @@ fi
 # --- Done --------------------------------------------------------------------
 
 echo ""
-echo "Install complete."
+echo "Install complete!"
 echo ""
-echo "  → Open a new terminal so PATH takes effect, then run:"
-echo "    cdc --cdc-doctor"
+echo "  → To use cdc in this terminal right now, run:"
+echo "    source $RC_FILE"
+echo ""
+echo "  Or just open a new terminal — PATH will be set automatically."
 echo ""
 echo "Prerequisites not handled by this script:"
 echo "  - Docker Desktop:  brew install --cask docker"
