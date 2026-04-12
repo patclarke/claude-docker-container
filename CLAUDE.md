@@ -51,8 +51,10 @@ execution.
 3. **Exec.** If the named sandbox doesn't exist, create it with
    `sbx create claude <primary> <mounts>`. Then inject credentials via
    `sbx exec -i`. Then create sharing symlinks via `sbx exec`. Finally attach
-   with `sbx exec -it <name> env ... claude <claude-args>`, replacing the
-   cdc process via `exec`. Propagate sbx's exit code.
+   with `sbx exec -it <name> env ... claude <claude-args>` in the foreground
+   (not via `exec` — we need to return to cdc after claude exits for cleanup).
+   After claude exits, `cdc` runs `sbx stop` to free the microVM's resources.
+   Pass `--cdc-keep-running` to skip the stop. Propagate sbx's exit code.
 
 The `--cdc-dry-run`, `--cdc-doctor`, and `--cdc-no-sandbox` flags short-circuit
 the exec phase in different ways; they still run parse and the relevant parts
