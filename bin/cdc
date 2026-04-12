@@ -248,6 +248,7 @@ WRAPPER FLAGS (consumed by cdc, not forwarded):
     --cdc-doctor             Run preflight checks + show resolved mount list
     --cdc-help, -h           Show this help
     --cdc-keep-running      Don't stop the sandbox after claude exits
+    --cdc-safe-mode         Don't pass --dangerously-skip-permissions to claude
 
 Everything else is forwarded to claude inside the sandbox.
 
@@ -273,6 +274,7 @@ CDC_LS=0
 CDC_RM=0
 CDC_RM_NAME=""
 CDC_KEEP_RUNNING=0
+CDC_SAFE_MODE=0
 CDC_EXTRA_MOUNTS=()
 CDC_SKIP_MOUNTS=()
 CDC_CONFIG_MOUNTS=()
@@ -530,6 +532,16 @@ build_sbx_argv() {
 		"LC_ALL=${LC_ALL:-en_US.UTF-8}"
 		claude
 	)
+
+	# Always pass --dangerously-skip-permissions unless --cdc-safe-mode is set.
+	# We cannot rely on sbx's baked-in settings.json having defaultMode:
+	# bypassPermissions — Claude Code ignores that setting in environments it
+	# considers "Remote" (IS_SANDBOX=1 triggers this). The CLI flag is the only
+	# reliable way to enable bypass mode. The sandbox IS the safety boundary.
+	if [[ $CDC_SAFE_MODE -eq 0 ]]; then
+		CDC_SBX_ARGV+=(--dangerously-skip-permissions)
+	fi
+
 	if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then
 		CDC_SBX_ARGV+=("${CLAUDE_ARGS[@]}")
 	fi
@@ -654,6 +666,10 @@ parse_args() {
 			CDC_KEEP_RUNNING=1
 			shift
 			;;
+		--cdc-safe-mode)
+			CDC_SAFE_MODE=1
+			shift
+			;;
 		*)
 			CLAUDE_ARGS+=("$1")
 			shift
@@ -675,6 +691,7 @@ dry_run_output() {
 	echo "SANDBOX_NAME=$(compute_sandbox_name)"
 	echo "NO_SANDBOX=$CDC_NO_SANDBOX"
 	echo "KEEP_RUNNING=$CDC_KEEP_RUNNING"
+	echo "SAFE_MODE=$CDC_SAFE_MODE"
 	echo
 	echo "MOUNTS (resolved, existing only):"
 	if [[ ${#CDC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then
