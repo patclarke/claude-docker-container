@@ -228,6 +228,7 @@ WRAPPER FLAGS (consumed by cdc, not forwarded):
     --cdc-dry-run            Print the resolved sbx run command, do not exec
     --cdc-doctor             Run preflight checks + show resolved mount list
     --cdc-help, -h           Show this help
+    --cdc-keep-running      Don't stop the sandbox after claude exits
 
 Everything else is forwarded to claude inside the sandbox.
 
@@ -627,6 +628,10 @@ parse_args() {
 				shift
 			fi
 			;;
+		--cdc-keep-running)
+			CDC_KEEP_RUNNING=1
+			shift
+			;;
 		*)
 			CLAUDE_ARGS+=("$1")
 			shift
@@ -647,6 +652,7 @@ dry_run_output() {
 	echo "CWD=$pwd_abs"
 	echo "SANDBOX_NAME=$(compute_sandbox_name)"
 	echo "NO_SANDBOX=$CDC_NO_SANDBOX"
+	echo "KEEP_RUNNING=$CDC_KEEP_RUNNING"
 	echo
 	echo "MOUNTS (resolved, existing only):"
 	if [[ ${#CDC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then
