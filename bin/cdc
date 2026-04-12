@@ -36,11 +36,14 @@ preflight_claude_binary() {
 
 preflight_github_secret() {
 	# sbx proxies git-over-HTTPS and api.github.com requests through a host-side
-	# token store. Without a `github` secret registered (global or per-sandbox),
-	# `git push` inside the sandbox fails with "could not read Username".
-	# Match the first whitespace-delimited column against "github" so header
-	# rows (e.g. "NAME SCOPE") and secret values are ignored.
-	sbx secret list -g 2>/dev/null | awk '$1 == "github" {f=1} END {exit !f}'
+	# token store. Without a `github` secret registered, `git push` inside the
+	# sandbox fails with "could not read Username".
+	#
+	# `sbx secret list -g` output format:
+	#   SCOPE      SERVICE   SECRET
+	#   (global)   github    gho_****
+	# The SERVICE column (field 2) is what we match against.
+	sbx secret list -g 2>/dev/null | awk '$2 == "github" {f=1} END {exit !f}'
 }
 
 die_preflight() {
