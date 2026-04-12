@@ -402,6 +402,12 @@ Mount plan (from /Users/you/.config/cdc/mounts.conf):
 All checks passed.
 ```
 
+If Docker Desktop isn't running when you run `cdc --cdc-doctor`, it will
+attempt to start it automatically (same as a normal `cdc` invocation) and
+wait up to 30 seconds. If Docker comes up, the check reports OK. If not,
+it reports FAIL and continues with the remaining checks so you still see
+the full picture.
+
 If anything is `FAIL`, the doctor prints exactly which step you need to
 revisit. The first time you run `cdc --cdc-doctor`, it creates
 `~/.config/cdc/mounts.conf` with the default mount policy.

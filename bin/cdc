@@ -148,10 +148,29 @@ run_doctor() {
 		fails=$((fails + 1))
 	fi
 
+	# Auto-start Docker if it's not running, same as the normal cdc exec path.
+	# Unlike ensure_docker_running (which calls die on failure), this inline
+	# version continues to the remaining checks so doctor always reports the
+	# full picture.
+	if ! docker info >/dev/null 2>&1; then
+		echo "  Docker Desktop is not running. Attempting to start it..." >&2
+		open -a Docker 2>/dev/null || true
+		local docker_waited=0
+		while ((docker_waited < 30)); do
+			if docker info >/dev/null 2>&1; then
+				break
+			fi
+			sleep 1
+			docker_waited=$((docker_waited + 1))
+			printf '.' >&2
+		done
+		[[ $docker_waited -gt 0 ]] && echo >&2
+	fi
+
 	if preflight_docker; then
 		print_check OK "Docker Desktop running"
 	else
-		print_check FAIL "Docker Desktop running    (open -a Docker)"
+		print_check FAIL "Docker Desktop running    (could not start within 30s)"
 		fails=$((fails + 1))
 	fi
 
