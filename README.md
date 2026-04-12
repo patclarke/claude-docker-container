@@ -548,6 +548,7 @@ through to `claude` untouched.
 | `--cdc-doctor`             | Run preflight checks and show the resolved mount list          |
 | `--cdc-help`, `-h`         | Usage                                                          |
 | `--cdc-keep-running`       | Don't stop the sandbox after claude exits                      |
+| `--cdc-safe-mode`          | Run claude with permission prompts (no `--dangerously-skip-permissions`) |
 
 ### Common invocations
 
