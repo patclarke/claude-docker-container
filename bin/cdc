@@ -228,6 +228,7 @@ WRAPPER FLAGS (consumed by cdc, not forwarded):
     --cdc-dry-run            Print the resolved sbx run command, do not exec
     --cdc-doctor             Run preflight checks + show resolved mount list
     --cdc-help, -h           Show this help
+    --cdc-keep-running      Don't stop the sandbox after claude exits
 
 Everything else is forwarded to claude inside the sandbox.
 
@@ -252,6 +253,7 @@ CDC_DOCTOR=0
 CDC_LS=0
 CDC_RM=0
 CDC_RM_NAME=""
+CDC_KEEP_RUNNING=0
 CDC_EXTRA_MOUNTS=()
 CDC_SKIP_MOUNTS=()
 CDC_CONFIG_MOUNTS=()
@@ -551,17 +553,32 @@ run_sandbox() {
 	# Step 3: set up sharing symlinks (idempotent)
 	setup_share_symlinks "$name"
 
-	# sbx race workaround: rapid successive sbx calls (create, exec for inject,
-	# exec for symlinks, then exec for attach) leave the sbx daemon in a state
-	# where the interactive attach is SIGKILL'd at startup (exit 137). A brief
-	# pause before the attach lets the daemon settle. 1s is sufficient in
-	# practice; under 1s is unreliable.
+	# sbx race workaround: rapid successive sbx calls leave the sbx daemon in
+	# a state where the next interactive exec is SIGKILL'd at startup (exit 137).
+	# A brief pause before the attach lets the daemon settle.
 	sleep 1
 
-	# Step 4: exec into sbx exec so cdc's process becomes sbx exec entirely.
-	# Using `exec` avoids any parent-child stdio/signal layering issues
-	# between cdc and the attach command.
-	exec "${CDC_SBX_ARGV[@]}"
+	# Step 4: run claude in the foreground. We use a foreground call (not exec)
+	# so we can run cleanup (sbx stop) after claude exits. The sleep above
+	# handles the 137 race that originally motivated the exec.
+	local rc=0
+
+	# Register cleanup trap so sandbox stops even on Ctrl-C / SIGTERM
+	if [[ $CDC_KEEP_RUNNING -eq 0 ]]; then
+		trap 'sbx stop "$name" >/dev/null 2>&1 || true; exit 130' INT TERM
+	fi
+
+	"${CDC_SBX_ARGV[@]}" || rc=$?
+
+	# Clean up trap
+	trap - INT TERM
+
+	# Auto-stop the sandbox to free resources (unless --cdc-keep-running)
+	if [[ $CDC_KEEP_RUNNING -eq 0 ]]; then
+		sbx stop "$name" >/dev/null 2>&1 || true
+	fi
+
+	return "$rc"
 }
 
 parse_args() {
@@ -611,6 +628,10 @@ parse_args() {
 				shift
 			fi
 			;;
+		--cdc-keep-running)
+			CDC_KEEP_RUNNING=1
+			shift
+			;;
 		*)
 			CLAUDE_ARGS+=("$1")
 			shift
@@ -631,6 +652,7 @@ dry_run_output() {
 	echo "CWD=$pwd_abs"
 	echo "SANDBOX_NAME=$(compute_sandbox_name)"
 	echo "NO_SANDBOX=$CDC_NO_SANDBOX"
+	echo "KEEP_RUNNING=$CDC_KEEP_RUNNING"
 	echo
 	echo "MOUNTS (resolved, existing only):"
 	if [[ ${#CDC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then

@@ -488,6 +488,10 @@ On every invocation, `cdc` does this:
    [your-forwarded-args]`. Claude launches inside the sandbox with your
    terminal's color capability, authenticated, with access to your session
    history.
+7. **Cleanup.** After claude exits (via `/quit`, Ctrl-D, or Ctrl-C), `cdc`
+   runs `sbx stop` on the sandbox to free resources. The sandbox transitions
+   to `stopped` — its state is preserved for next time. Pass
+   `--cdc-keep-running` to skip this step.
 
 The script is ~680 lines of bash at `bin/cdc`. Read it — it's meant to be
 understood.
@@ -577,6 +581,7 @@ through to `claude` untouched.
 | `--cdc-dry-run`            | Print the resolved `sbx` command for this cwd, don't exec      |
 | `--cdc-doctor`             | Run preflight checks and show the resolved mount list          |
 | `--cdc-help`, `-h`         | Usage                                                          |
+| `--cdc-keep-running`       | Don't stop the sandbox after claude exits                      |
 
 ### Common invocations
 
@@ -650,6 +655,24 @@ set up symlinks, attach) leaves sbx's daemon in a state where the next
 interactive exec is SIGKILL'd at startup (exit 137). A 1-second pause before
 the final attach lets the daemon settle. It's a workaround; the real fix is
 upstream in sbx. Issue to file: on the roadmap.
+
+**Does the sandbox stay running after I exit?**
+
+No. By default, `cdc` runs `sbx stop` on the sandbox after claude exits.
+This frees the microVM's memory and CPU. The sandbox transitions to `stopped`
+state — its filesystem and mount config are preserved, and the next `cdc`
+invocation from the same directory restarts it in a few seconds.
+
+If you want the sandbox to stay running (for faster reconnect or because
+you're running multiple terminals against the same sandbox), pass
+`--cdc-keep-running`:
+
+```bash
+cdc --cdc-keep-running -c
+```
+
+You can also stop all running sandboxes manually at any time with
+`sbx stop $(sbx ls -q)`.
 
 **How does authentication work?**
 
