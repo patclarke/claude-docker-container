@@ -290,8 +290,11 @@ write_default_mounts_file() {
 # Non-existent paths are skipped silently at launch.
 
 # Cross-project reference (read-only view of sibling repos).
-# cdc automatically strips any mount that's an ancestor of $PWD, so
-# this is safe even when cwd is inside ~/workspace.
+# CHANGE THIS to wherever you keep your code projects — e.g.:
+#   ~/code:ro    ~/dev:ro    ~/Projects:ro    ~/src:ro
+# If the path doesn't exist on your machine, it's silently ignored.
+# cdc automatically strips this mount when cwd is inside it, so it's
+# safe even when you're working inside the directory listed here.
 ~/workspace:ro
 
 # Ad-hoc file sharing from normal macOS locations

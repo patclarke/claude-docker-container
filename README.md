@@ -412,6 +412,13 @@ If anything is `FAIL`, the doctor prints exactly which step you need to
 revisit. The first time you run `cdc --cdc-doctor`, it creates
 `~/.config/cdc/mounts.conf` with the default mount policy.
 
+**One thing to check:** the default config assumes your projects live in
+`~/workspace`. If you keep code somewhere else (like `~/code`, `~/dev`,
+or `~/Projects`), open `~/.config/cdc/mounts.conf` and change the
+`~/workspace:ro` line to your actual projects directory. This gives the
+sandbox read-only access to sibling repos for cross-project context. If
+the path doesn't exist, it's silently ignored — no harm done.
+
 **You're done.** Jump to [Quick start](#quick-start) to actually run
 something.
 
