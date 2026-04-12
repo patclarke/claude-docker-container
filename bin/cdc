@@ -34,6 +34,15 @@ preflight_claude_binary() {
 	command -v claude >/dev/null 2>&1
 }
 
+preflight_github_secret() {
+	# sbx proxies git-over-HTTPS and api.github.com requests through a host-side
+	# token store. Without a `github` secret registered (global or per-sandbox),
+	# `git push` inside the sandbox fails with "could not read Username".
+	# Match the first whitespace-delimited column against "github" so header
+	# rows (e.g. "NAME SCOPE") and secret values are ignored.
+	sbx secret list -g 2>/dev/null | awk '$1 == "github" {f=1} END {exit !f}'
+}
+
 die_preflight() {
 	case "$1" in
 	sbx)
@@ -192,6 +201,12 @@ run_doctor() {
 		print_check OK "claude installed on host (escape hatch available)"
 	else
 		print_check WARN "claude not on host    (--cdc-no-sandbox will fail)"
+	fi
+
+	if preflight_github_secret; then
+		print_check OK "sbx github secret set (git over HTTPS will work inside sandbox)"
+	else
+		print_check WARN "no sbx github secret    (fix: sbx secret set -g github -t \"\$(gh auth token)\")"
 	fi
 
 	echo
