@@ -94,6 +94,31 @@ else
 	echo "  Try opening a new terminal and running: cdc --cdc-doctor"
 fi
 
+# --- Step 4: set sbx github secret from gh auth token -----------------------
+#
+# Without this, git over HTTPS and api.github.com requests from inside the
+# sandbox fail silently. The token is stored in sbx's host-side proxy store,
+# not injected into the sandbox filesystem, so agents inside the sandbox
+# never see it directly.
+
+if command -v sbx >/dev/null 2>&1 && command -v gh >/dev/null 2>&1; then
+	if sbx secret list -g 2>/dev/null | awk '$2 == "github" {exit 0} END {exit 1}'; then
+		: # already set; leave it alone
+	elif gh_token="$(gh auth token 2>/dev/null)" && [[ -n "$gh_token" ]]; then
+		echo ""
+		echo "Setting sbx global secret 'github' from your gh auth token..."
+		echo "  (Lets git push and curl api.github.com work inside cdc sandboxes."
+		echo "   Stored in sbx's host-side proxy — the agent never sees the token.)"
+		if sbx secret set -g github -t "$gh_token" >/dev/null 2>&1; then
+			echo "  ✓ Set sbx global secret: github"
+		else
+			echo "  ⚠️  Failed to set secret. Run manually:"
+			echo "       sbx secret set -g github -t \"\$(gh auth token)\""
+		fi
+		unset gh_token
+	fi
+fi
+
 # --- Done --------------------------------------------------------------------
 
 echo ""

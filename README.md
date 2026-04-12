@@ -13,6 +13,7 @@ Run Claude Code in dangerous mode safely inside a fast, easy-to-use microVM that
 - [Quick Use](#quick-use)
 - [Install](#install)
 - [Updating](#updating)
+- [GitHub access from the sandbox](#github-access-from-the-sandbox)
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
@@ -491,6 +492,68 @@ ln -sf ~/src/claude-docker-container/bin/cdc ~/bin/cdc
 
 Then `cd ~/src/claude-docker-container && git pull` whenever you want the
 latest.
+
+## GitHub access from the sandbox
+
+The sandbox doesn't inherit your host's `gh` CLI login. Instead, `sbx` ships a
+host-side proxy that transparently injects a GitHub token into outbound HTTPS
+traffic from inside the sandbox. For that to work, the token has to live in
+sbx's secret store — `cdc` doesn't manage it for you.
+
+**The installer sets this up automatically.** If `gh` is installed and logged
+in when you run the installer, it runs the equivalent of:
+
+```bash
+sbx secret set -g github -t "$(gh auth token)"
+```
+
+If that didn't happen (e.g. you installed `gh` after `cdc`, or you were
+logged out at install time), `cdc --cdc-doctor` will print a `WARN` line with
+the exact command to run.
+
+### What works, what doesn't
+
+| What you run inside the sandbox | Works? | Why |
+|---|---|---|
+| `git clone/fetch/push` over HTTPS | Yes | Proxy injects the token at the network layer |
+| `curl https://api.github.com/...` | Yes | Same |
+| `git` over SSH (`git@github.com:...`) | Yes | `~/.ssh` is mounted read-only |
+| `gh` CLI (`gh pr create`, `gh issue view`, ...) | **No** | Reads its own token from the host Keychain, which the sandbox can't see |
+
+The `gh` CLI gap is rarely a blocker in practice — anything `gh` does, you
+can do with a `curl` against `api.github.com`. Example, creating a PR:
+
+```bash
+curl -sS -X POST https://api.github.com/repos/OWNER/REPO/pulls \
+  -H "Accept: application/vnd.github+json" \
+  -d '{"title":"…","head":"my-branch","base":"main","body":"…"}'
+```
+
+No token header needed — the proxy adds it.
+
+### Gotcha: global secrets and existing sandboxes
+
+`sbx secret set -g github` only takes effect for sandboxes created **after**
+the secret was set. If you set the secret and an existing sandbox still
+can't authenticate, recreate it:
+
+```bash
+cdc --cdc-rm
+cdc
+```
+
+### Security note
+
+The token is stored in sbx's host-side proxy store. Agents running inside
+the sandbox cannot read the token directly — they can only *use* it by
+making GitHub API calls that the proxy intercepts. This is why `cdc` uses
+sbx secrets for GitHub instead of injecting a credential file into the
+sandbox filesystem the way it does for the Claude Code OAuth token.
+
+A prompt-injected agent can still *use* your GitHub permissions while it's
+running (delete repos, push malicious code, etc.). Scope your token or
+switch to fine-grained GitHub tokens if that's a concern. See
+[Recommended: credential scoping](#recommended-credential-scoping).
 
 ## Quick start
 
