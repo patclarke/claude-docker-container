@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working in this repository.
 
 ## Project overview
 
-`claude-docker-sandbox` ships a single bash script — `cc` — that wraps
+`claude-docker-container` ships a single bash script — `cdc` — that wraps
 Claude Code invocations in a [Docker Sandbox](https://docs.docker.com/ai/sandboxes/)
 microVM, so unsupervised agents have a bounded blast radius instead of an
 unbounded one. See [`README.md`](README.md) for user-facing documentation.
@@ -12,7 +12,7 @@ unbounded one. See [`README.md`](README.md) for user-facing documentation.
 The implementation is intentionally small: one shell script, one config file,
 one README. Resist the urge to grow it into a framework.
 
-**Auth flow:** `cc` extracts the Claude Code token from the macOS Keychain
+**Auth flow:** `cdc` extracts the Claude Code token from the macOS Keychain
 (`security find-generic-password -s 'Claude Code-credentials'`) and injects it
 into the sandbox on every invocation via `sbx exec`. Claude inside the sandbox
 runs as user `agent` and looks for credentials at
@@ -22,7 +22,7 @@ runs as user `agent` and looks for credentials at
 
 ```
 .
-├── bin/cc                  the wrapper script
+├── bin/cdc                 the wrapper script
 ├── README.md               user-facing documentation
 ├── CLAUDE.md               this file
 ├── LICENSE                 MIT
@@ -37,24 +37,24 @@ not try to reconstruct it from git history.
 
 ## How to think about the script
 
-`cc` runs in three phases on every invocation. When modifying it, keep these
+`cdc` runs in three phases on every invocation. When modifying it, keep these
 phases distinct — do not interleave parsing with planning or planning with
 execution.
 
-1. **Parse.** Walk `$@` once. Any arg starting with `--cc-` is a wrapper flag
+1. **Parse.** Walk `$@` once. Any arg starting with `--cdc-` is a wrapper flag
    and gets consumed; everything else goes into a `CLAUDE_ARGS` array to be
    forwarded verbatim to `claude` inside the sandbox.
-2. **Plan.** Run preflight checks. Read `~/.config/cc/mounts.conf` (create it
-   from defaults if missing). Apply `--cc-mount` additions and `--cc-no-mount`
+2. **Plan.** Run preflight checks. Read `~/.config/cdc/mounts.conf` (create it
+   from defaults if missing). Apply `--cdc-mount` additions and `--cdc-no-mount`
    removals. Strip ancestor mounts. Compute a deterministic sandbox name from
    cwd. Build the final `sbx` argv.
 3. **Exec.** If the named sandbox doesn't exist, create it with
    `sbx create claude <primary> <mounts>`. Then inject credentials via
    `sbx exec -i`. Then create sharing symlinks via `sbx exec`. Finally attach
    with `sbx exec -it <name> env ... claude <claude-args>`, replacing the
-   cc process via `exec`. Propagate sbx's exit code.
+   cdc process via `exec`. Propagate sbx's exit code.
 
-The `--cc-dry-run`, `--cc-doctor`, and `--cc-no-sandbox` flags short-circuit
+The `--cdc-dry-run`, `--cdc-doctor`, and `--cdc-no-sandbox` flags short-circuit
 the exec phase in different ways; they still run parse and the relevant parts
 of plan.
 
@@ -64,14 +64,14 @@ The original design spec had three "unknowns" that live testing resolved:
 
 1. **sbx arg-passing syntax:** `sbx run <sandbox> -- <claude-args>` works, but
    `sbx run` itself misbehaves with our credential + symlink flow and sends
-   SIGKILL to claude at startup. cc uses `sbx exec` as the attach mechanism
+   SIGKILL to claude at startup. cdc uses `sbx exec` as the attach mechanism
    instead, losing some of sbx's agent-launcher niceties but gaining reliable
    exec.
 
 2. **Nested mounts:** sbx accepts overlapping mounts at the parse level but
    its container-start hooks fail when the cwd's parent directory is under an
    RO mount (the hook tries to write a CLAUDE.md one level above cwd and hits
-   a read-only filesystem). cc strips any mount that is an ancestor of the
+   a read-only filesystem). cdc strips any mount that is an ancestor of the
    current cwd from the resolved mount list as a general rule.
 
 3. **`~/.claude` cross-visibility:** inside the sandbox, `HOME=/home/agent`
@@ -92,7 +92,7 @@ Additional runtime surprises found during implementation:
    explicitly set the working directory, claude starts in an empty dir and
    reports "no files found" no matter what is in the host path. Fix:
    `sbx exec -w <host-path>` when attaching so claude starts in the real
-   mounted location. This is `bin/cc`'s `build_sbx_argv` behavior — see
+   mounted location. This is `bin/cdc`'s `build_sbx_argv` behavior — see
    the `-w "$pwd_abs"` argument. Reported by @wmaykut as issue #6.
 
 5. **sbx rapid-call race:** Running several sbx subcommands back-to-back
@@ -116,7 +116,7 @@ Key sbx facts that govern the implementation:
 
 - **Primary workspace path:** sbx mounts the primary workspace at its
   absolute host path via virtiofs bind mount, same as additional mounts.
-  It does NOT symlink `/home/agent/workspace` to the mount. `cc` sets the
+  It does NOT symlink `/home/agent/workspace` to the mount. `cdc` sets the
   initial working directory with `sbx exec -w` to land the agent at the
   real host path.
 - **sbx has no env var flag:** `sbx create` only supports `--branch`,
@@ -125,7 +125,7 @@ Key sbx facts that govern the implementation:
 - **Bypass mode is the default:** sbx's claude image has
   `"defaultMode": "bypassPermissions"` pre-configured in
   `/home/agent/.claude/settings.json`. Do not add any bypass flag as a
-  default in `cc`.
+  default in `cdc`.
 - **Create vs. attach:** Passing workspace paths to an existing sandbox errors
   with "sandbox X already exists and can't be given new workspaces". The
   correct flow: `sbx create claude <primary> <mounts>` once, then
@@ -209,18 +209,18 @@ Conventional format:
 There is **no automated test suite.** This is a bash wrapper around a CLI on
 a specific developer machine; the validation model is a manual checklist.
 
-When changing `bin/cc`, walk through the full validation matrix before opening
+When changing `bin/cdc`, walk through the full validation matrix before opening
 a PR:
 
-1. **Preflight matrix.** Run `cc --cc-doctor` with each dependency
+1. **Preflight matrix.** Run `cdc --cdc-doctor` with each dependency
    intentionally broken, confirm the right FAIL lines appear with actionable
    remedies. Restore state.
 2. **Core invocation matrix.** From a real project under `~/workspace`,
-   exercise `cc`, `cc -c`, `cc --cc-name experiment-1`, `cc --cc-no-sandbox`,
-   `cc --cc-dry-run`, `cc --cc-ls`, `cc --cc-rm`.
-3. **Mount override matrix.** Confirm `--cc-mount` additions and
-   `--cc-no-mount` removals appear correctly in `--cc-dry-run` output.
-4. **Worktree sanity.** Run `cc` from a `.worktrees/feat-foo` directory under
+   exercise `cdc`, `cdc -c`, `cdc --cdc-name experiment-1`, `cdc --cdc-no-sandbox`,
+   `cdc --cdc-dry-run`, `cdc --cdc-ls`, `cdc --cdc-rm`.
+3. **Mount override matrix.** Confirm `--cdc-mount` additions and
+   `--cdc-no-mount` removals appear correctly in `--cdc-dry-run` output.
+4. **Worktree sanity.** Run `cdc` from a `.worktrees/feat-foo` directory under
    another repo and confirm the primary mount is the worktree path, not the
    main checkout.
 5. **Failure spot checks.** Quit Docker Desktop mid-session, Ctrl-C during the
@@ -229,8 +229,8 @@ a PR:
 Shell lint:
 
 ```bash
-shellcheck bin/cc
-shfmt -d bin/cc
+shellcheck bin/cdc
+shfmt -d bin/cdc
 ```
 
 Install if missing: `brew install shellcheck shfmt`.
@@ -249,11 +249,11 @@ This repo intentionally does one thing. **Do not** add:
   would dwarf the script itself.
 
 If a change you're considering doesn't fit in a `feat:` or `fix:` commit
-against `bin/cc`, `README.md`, `CLAUDE.md`, or `.gitignore`, it probably
+against `bin/cdc`, `README.md`, `CLAUDE.md`, or `.gitignore`, it probably
 doesn't belong in this repo.
 
 **Plugin and skill installation:** plugins and skills must be installed on the
-host (`claude` without `cc`), not inside a sandbox. The sandbox mounts
+host (`claude` without `cdc`), not inside a sandbox. The sandbox mounts
 `~/.claude/plugins` and `~/.claude/skills` read-only to prevent a runaway
 sandbox from injecting malicious code into host-side executable paths. Any
 plugin installed inside a sandbox is lost when the session ends.
@@ -263,4 +263,4 @@ plugin installed inside a sandbox is lost when the session ends.
   `/Users/<you>/.claude/plugins` and `/Users/<you>/.claude/skills`. A plugin
   install from inside the sandbox will either fail or write to a scratch
   location that vanishes when the sandbox is removed. Install plugins from
-  a host claude session instead (plain `claude`, not via `cc`).
+  a host claude session instead (plain `claude`, not via `cdc`).
