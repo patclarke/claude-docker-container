@@ -463,8 +463,9 @@ build_sbx_argv() {
 	# `sbx run` because sbx's agent launcher misbehaves with our credential
 	# injection + symlink flow (claude gets SIGKILL'd at startup). `sbx exec`
 	# with -i/-t passes stdio through cleanly.
-	local name
+	local name pwd_abs
 	name="$(compute_sandbox_name)"
+	pwd_abs="$(pwd -P)"
 
 	# -i always (stdin passthrough); -t only if stdin is a real TTY
 	local exec_flags="-i"
@@ -472,12 +473,19 @@ build_sbx_argv() {
 		exec_flags="-it"
 	fi
 
+	# `sbx exec -w` sets the working directory inside the sandbox. Without it,
+	# sbx drops us into /home/agent/workspace — an empty directory in the
+	# sandbox image, NOT the primary workspace mount. The primary workspace
+	# is bind-mounted at its absolute host path (same as additional workspaces),
+	# so we cd there explicitly. Without this, claude starts in an empty dir
+	# and cannot see any project files.
+	#
 	# Wrap the claude invocation in `env VAR=... claude ...` to propagate
 	# terminal/color variables into the sandbox. sbx exec does not inherit
 	# the host's TERM/COLORTERM/etc, so without this claude defaults to
 	# minimal/no-color output.
 	CC_SBX_ARGV=(
-		sbx exec "$exec_flags" "$name"
+		sbx exec "$exec_flags" -w "$pwd_abs" "$name"
 		env
 		"TERM=${TERM:-xterm-256color}"
 		"COLORTERM=${COLORTERM:-truecolor}"

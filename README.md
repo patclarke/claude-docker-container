@@ -662,14 +662,12 @@ shell variable, so `bash -x` cannot leak it.
 
 **Can I share sessions between host `claude` and `cc`?**
 
-Yes, via `~/.claude/projects/` being mounted read-write plus a symlink inside
-the sandbox from `/home/agent/.claude/projects` to the host path. A session
-started in one is resumable from the other with `claude -c` / `cc -c`.
-
-Caveat: the primary workspace is remapped to `/home/agent/workspace` inside
-the sandbox. Session IDs are cwd-based, so if you start a session on the
-host and look for it with `-c` inside the sandbox, Claude may not find it
-immediately. Try `/resume` to browse sessions by list instead.
+Yes. `~/.claude/projects/` is mounted read-write, plus `cc` sets up a
+symlink inside the sandbox from `/home/agent/.claude/projects` to the host
+path. `cc` also uses `sbx exec -w <host-path>` so claude's working directory
+inside the sandbox matches the exact host path — which means session IDs
+(cwd-based) line up between host and sandbox claude. A session started in
+one is resumable from the other with `claude -c` / `cc -c`.
 
 **Can I use this on Linux or Windows?**
 

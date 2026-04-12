@@ -74,38 +74,51 @@ The original design spec had three "unknowns" that live testing resolved:
    a read-only filesystem). cc strips any mount that is an ancestor of the
    current cwd from the resolved mount list as a general rule.
 
-3. **`~/.claude` cross-visibility:** sbx remaps the primary workspace to
-   `/home/agent/workspace` inside the sandbox, and `HOME` is `/home/agent`.
-   The host's `~/.claude` at `/Users/pat/.claude` is not automatically
-   discovered by claude. Solution: mount specific subpaths (`projects`,
-   `plugins`, `skills`) as additional workspaces at their absolute host paths,
-   then symlink `/home/agent/.claude/{projects,plugins,skills}` to those host
-   paths post-create via `sbx exec`. Credentials are injected separately via
+3. **`~/.claude` cross-visibility:** inside the sandbox, `HOME=/home/agent`
+   and claude reads its config from `/home/agent/.claude/`. The host's
+   `~/.claude` at `/Users/<you>/.claude` is not automatically discovered.
+   Solution: mount specific subpaths (`projects`, `plugins`, `skills`) as
+   additional workspaces at their absolute host paths, then symlink
+   `/home/agent/.claude/{projects,plugins,skills}` to those host paths
+   post-create via `sbx exec`. Credentials are injected separately via
    `sbx exec -i` pipe from `security find-generic-password`.
 
 Additional runtime surprises found during implementation:
 
-4. **sbx rapid-call race:** Running several sbx subcommands back-to-back
-   (`create`, `exec` for inject, `exec` for symlinks, final `exec` to attach)
-   leaves the sbx daemon in a state where the next interactive exec is
-   SIGKILL'd at startup. A 1-second `sleep` before the final attach avoids
-   this. Worth reporting upstream.
+4. **The primary workspace trap:** sbx mounts the primary workspace at its
+   **absolute host path** (same as additional workspaces) via virtiofs, but
+   drops the agent into `/home/agent/workspace` — an empty directory in the
+   sandbox image that is NOT a mount and NOT a symlink. If you don't
+   explicitly set the working directory, claude starts in an empty dir and
+   reports "no files found" no matter what is in the host path. Fix:
+   `sbx exec -w <host-path>` when attaching so claude starts in the real
+   mounted location. This is `bin/cc`'s `build_sbx_argv` behavior — see
+   the `-w "$pwd_abs"` argument. Reported by @wmaykut as issue #6.
 
-5. **`bash -x` leaks secrets:** The first version of `inject_credentials`
-   stored the extracted Keychain token in a shell variable, which `bash -x`
-   would expand and print to stderr. The current version pipes directly from
-   `security` into `sbx exec -i` without an intermediate variable.
+5. **sbx rapid-call race:** Running several sbx subcommands back-to-back
+   (`create`, `exec` for inject, `exec` for symlinks, final `exec` to
+   attach) leaves the sbx daemon in a state where the next interactive
+   exec is SIGKILL'd at startup. A 1-second `sleep` before the final
+   attach avoids this. Worth reporting upstream.
 
-6. **TERM/COLORTERM env passthrough:** `sbx exec` does not inherit the host's
-   terminal environment. Claude inside the sandbox defaults to minimal/no-color
-   output unless we explicitly wrap the invocation in `env TERM=... COLORTERM=...`.
+6. **`bash -x` leaks secrets:** The first version of `inject_credentials`
+   stored the extracted Keychain token in a shell variable, which
+   `bash -x` would expand and print to stderr. The current version pipes
+   directly from `security` into `sbx exec -i` without an intermediate
+   variable.
+
+7. **TERM/COLORTERM env passthrough:** `sbx exec` does not inherit the
+   host's terminal environment. Claude inside the sandbox defaults to
+   minimal/no-color output unless we explicitly wrap the invocation in
+   `env TERM=... COLORTERM=...`.
 
 Key sbx facts that govern the implementation:
 
-- **Primary workspace path:** sbx remaps the primary workspace to
-  `/home/agent/workspace` inside the container. It does NOT preserve the
-  absolute host path. Additional mounts (e.g. `~/.aws`) DO land at their
-  absolute host paths inside the sandbox.
+- **Primary workspace path:** sbx mounts the primary workspace at its
+  absolute host path via virtiofs bind mount, same as additional mounts.
+  It does NOT symlink `/home/agent/workspace` to the mount. `cc` sets the
+  initial working directory with `sbx exec -w` to land the agent at the
+  real host path.
 - **sbx has no env var flag:** `sbx create` only supports `--branch`,
   `--memory`, `--name`, `--template`. Credentials and other config must be
   injected via `sbx exec`.
