@@ -541,6 +541,13 @@ build_sbx_argv() {
 	# terminal/color variables into the sandbox. sbx exec does not inherit
 	# the host's TERM/COLORTERM/etc, so without this claude defaults to
 	# minimal/no-color output.
+	#
+	# GH_TOKEN is a placeholder so `gh` CLI skips its local auth precheck.
+	# The sbx proxy rewrites the Authorization header on outbound
+	# api.github.com traffic using the real token from `sbx secret set -g
+	# github`, so the literal value here is never sent on the wire and has
+	# no security implication. Without this, `gh` refuses to run with
+	# "please run gh auth login" even though network-layer auth works.
 	CDC_SBX_ARGV=(
 		sbx exec "$exec_flags" -w "$pwd_abs" "$name"
 		env
@@ -548,6 +555,7 @@ build_sbx_argv() {
 		"COLORTERM=${COLORTERM:-truecolor}"
 		"LANG=${LANG:-en_US.UTF-8}"
 		"LC_ALL=${LC_ALL:-en_US.UTF-8}"
+		"GH_TOKEN=injected-by-sbx-proxy"
 		claude
 	)
 

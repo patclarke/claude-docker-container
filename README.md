@@ -518,18 +518,10 @@ the exact command to run.
 | `git clone/fetch/push` over HTTPS | Yes | Proxy injects the token at the network layer |
 | `curl https://api.github.com/...` | Yes | Same |
 | `git` over SSH (`git@github.com:...`) | Yes | `~/.ssh` is mounted read-only |
-| `gh` CLI (`gh pr create`, `gh issue view`, ...) | **No** | Reads its own token from the host Keychain, which the sandbox can't see |
+| `gh` CLI (`gh pr create`, `gh issue view`, ...) | Yes | `cdc` sets `GH_TOKEN` to a placeholder so `gh` skips its local auth precheck; the proxy rewrites the Authorization header on the wire |
 
-The `gh` CLI gap is rarely a blocker in practice — anything `gh` does, you
-can do with a `curl` against `api.github.com`. Example, creating a PR:
-
-```bash
-curl -sS -X POST https://api.github.com/repos/OWNER/REPO/pulls \
-  -H "Accept: application/vnd.github+json" \
-  -d '{"title":"…","head":"my-branch","base":"main","body":"…"}'
-```
-
-No token header needed — the proxy adds it.
+If the `github` secret isn't set, `gh` and `git push` both fail at the network
+layer — the proxy has no token to inject. Run `cdc --cdc-doctor` to check.
 
 ### Gotcha: global secrets and existing sandboxes
 
