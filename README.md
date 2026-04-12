@@ -1,40 +1,27 @@
 # claude-docker-container
 
-`cdc` — run [Claude Code](https://claude.com/claude-code) in dangerous mode
-without losing sleep.
-
-## The pitch
-
-If you use Claude Code, you've probably tried `--dangerously-skip-permissions`.
-You stop answering "can I run `git status`?" twenty times an hour. Your
-velocity doubles. You also know you're one bad prompt away from a
-really bad day — the same shell that can run `git status` can run
-`aws s3 rb`, `gh repo delete`, or `rm -rf ~`.
-
-I was doing this too. For months I went back and forth — accept prompts and
-grind through them, or flip to dangerous and tell myself I'd be careful.
-
-What changed for me was [obra/superpowers](https://github.com/obra/superpowers),
-a set of workflow skills for Claude Code — brainstorming, test-driven
-development, spec writing, code review. The side effect I didn't expect:
-Claude started asking me better follow-up questions. Instead of reflexive
-approvals, I was actually thinking again, and I realized I could be OK with
-dangerous mode — *if the blast radius was physically bounded*.
-
-A lot of my side project work involves AWS infrastructure and GitHub. If an
-agent goes off the rails and `aws s3 rb` the wrong bucket, or force-pushes
-`main`, I have a bad week. I wanted dangerous mode's velocity *and* a hard
-guarantee that certain kinds of damage were impossible.
-
-That's what `cdc` is.
-
-## What it is
-
 `cdc` is a bash wrapper around [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/)
 that runs Claude Code inside an isolated microVM. **Inside the sandbox,
 `--dangerously-skip-permissions` is always on. You can't turn it off — that's
 the whole point.** The sandbox is the blast radius, not the prompt.
 
+## The pitch
+
+If you use Claude Code, you’ve probably tried `--dangerously-skip-permissions`.
+
+You stop answering “can I run `git status`?” twenty times an hour. Your velocity doubles. But you also know you’re one bad prompt away from a really bad day. The same shell that can run `git status` can just as easily run `aws s3 rb`, `gh repo delete`, or `rm -rf ~`.
+
+For a long time, I avoided using `--dangerously-skip-permissions` because of that risk. Meanwhile, I had friends who embraced it and ran in full YOLO mode on their machines. We went back and forth on it. Some avoided Docker because they weren’t familiar with it. Others didn’t want the overhead of setting up a separate dev environment—with all the tools, skills, MCP configs, and tweaks they’d already invested time in.
+
+What changed for me was [obra/superpowers](https://github.com/obra/superpowers), a set of workflow skills for Claude Code—brainstorming, test-driven development, spec writing, and code review. The unexpected side effect: Claude started asking better questions and building solid plans with clear goals. After the planning phase, I found myself rarely saying “no.” That’s when I realized I could be comfortable with dangerous mode—*if the blast radius was strictly contained*.
+
+At the same time, Claude often wants to `pip install`, `brew install`, or pull in random dependencies—things I don’t necessarily want on my main system. Maybe it needs to experiment with configs or modify system-level settings. I want that freedom, but in isolation. What I don’t want is to spin up and maintain a brand-new dev container for every project—or constantly re-import my setup.
+
+I wanted the speed of dangerous mode *and* a hard guarantee that certain kinds of damage are impossible.
+
+That’s what `cdc` is.
+
+## What it is
 The sandbox is a small, headless Linux environment that can only see the host
 paths you've explicitly shared with it. It has its own filesystem, its own
 Docker daemon, its own network namespace, its own kernel. To the agent running
@@ -59,10 +46,7 @@ You keep typing the same `claude …` commands you're used to. You just type
 ## What `cdc` guarantees
 
 Inside the sandbox, Claude runs with `--dangerously-skip-permissions` enabled.
-You can't turn it off. (You can bypass the sandbox entirely with
-`cdc --cdc-no-sandbox`, but at that point you're back to plain `claude` with no
-isolation. `cdc` also doesn't shadow `claude` — your regular `claude` binary
-is always on `PATH` unchanged, as an escape hatch.)
+You can't turn it off. `cdc` also doesn't shadow `claude` — your regular `claude` binary is always on `PATH` unchanged, as an escape hatch.)
 
 With the default mount policy, these things are **physically impossible**:
 
@@ -159,52 +143,6 @@ Instead of trying to filter HTTP methods at the proxy layer, **give the agent
 credentials that are already scoped to what you want it to do**. If the
 credential literally cannot perform `aws s3 rb`, no amount of prompt
 injection can make it happen — the API returns AccessDenied, end of story.
-
-### AWS
-
-**Use short-lived credentials via SSO or a scoped IAM role.**
-
-- If you use AWS SSO: configure your session duration to something short
-  (1 hour is typical). Any credential the sandbox sees expires fast.
-- [`granted/assume`](https://docs.commonfate.io/granted/) and
-  [`aws-vault`](https://github.com/99designs/aws-vault) both let you get
-  temporary session credentials for a specific role. Use them to run `cdc`
-  inside a shell that has only the scoped role in its `AWS_PROFILE`.
-- For read-only work: create a dedicated IAM role with just `ReadOnlyAccess`
-  (AWS-managed policy). Use *that* role's profile when you run `cdc`.
-- If you're not doing AWS work in a particular session, drop the mount:
-  `cdc --cdc-no-mount ~/.aws`. The sandbox won't see AWS credentials at all.
-
-### GitHub
-
-**Use a fine-grained personal access token with minimal scopes.**
-
-GitHub fine-grained PATs let you restrict to specific repositories and
-specific permissions. For "the agent can open PRs but not delete repos":
-
-1. Go to `github.com/settings/personal-access-tokens/new`
-2. Select the repositories you're OK with the agent touching
-3. Grant only: `Contents: Read`, `Pull requests: Write`, `Issues: Write`
-4. Do NOT grant: `Administration`, `Delete repo`, `Workflows`, `Secrets`
-5. Generate the token, then authenticate a separate `gh` profile
-6. Swap the gh profile before running `cdc`
-
-With that token mounted, a compromised agent literally cannot call
-`DELETE /repos/{owner}/{repo}`. GitHub's API rejects the request.
-
-### SSH
-
-If you only need SSH for `git push` over SSH and nothing else, consider using
-[deploy keys](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys)
-scoped to a single repo rather than your full-user SSH key. Mount the
-directory containing just that key instead of all of `~/.ssh`.
-
-### The pattern
-
-For every credential you mount into the sandbox, ask: *"what is the minimum
-set of operations the agent needs for this task?"* Create a credential that
-can do only that, and use it. That's more effective than any proxy-layer
-method filter, and it works even when the prompt injection is clever.
 
 ## Install
 
@@ -732,24 +670,7 @@ and a different credential flow.
 
 **Can I use this with non-Claude agents (Codex, Gemini, etc.)?**
 
-Not currently. sbx supports multiple agents, but `cdc`'s credential injection
-is Claude-specific. Making it agent-agnostic would be a meaningful refactor.
-
-## Roadmap
-
-- [x] `bin/cdc` script — parse, plan, preflight, exec phases
-- [x] Auto-authentication from macOS Keychain
-- [x] Session history sharing via symlinks
-- [x] Plugin/skill read-only sharing
-- [x] Color-aware TTY pass-through
-- [x] `--cdc-dry-run`, `--cdc-doctor`, `--cdc-ls`, `--cdc-rm`, `--cdc-no-sandbox`
-- [ ] Manual validation matrix walked through end-to-end
-- [ ] File upstream issue for sbx rapid-call race (currently worked around
-      with 1s sleep)
-- [ ] Homebrew tap / formula
-- [ ] Linux support
-- [ ] Credential scoping helper scripts (example profiles for read-only AWS
-      and scoped-PAT GitHub)
+Not currently. sbx supports multiple agents, but `cdc`'s credential injection is Claude-specific (for now).
 
 ## License
 
