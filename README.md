@@ -12,6 +12,7 @@ Run Claude Code in dangerous mode safely inside a fast, easy-to-use microVM that
 - [Quick Install](#quick-install)
 - [Quick Use](#quick-use)
 - [Install](#install)
+- [Updating](#updating)
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
@@ -460,6 +461,36 @@ Step 3 if you want the escape hatch.
 **Anything else** -- open an issue at
 [github.com/patclarke/claude-docker-container/issues](https://github.com/patclarke/claude-docker-container/issues)
 with the output of `cdc --cdc-doctor` and I'll take a look.
+
+## Updating
+
+`cdc` is a single bash script with no auto-update. When a new version lands
+on `main`, re-run the one-liner installer — it's idempotent and replaces
+`~/bin/cdc` with the latest version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/patclarke/claude-docker-container/main/install.sh | bash
+```
+
+Confirm the new version is in place:
+
+```bash
+cdc --cdc-doctor
+```
+
+If you installed manually, re-run the `curl -o ~/bin/cdc` command from the
+[manual install](#step-5-install-cdc) section.
+
+Prefer to track the repo directly? Clone it and symlink `~/bin/cdc` at the
+checkout so `git pull` is all you need:
+
+```bash
+git clone https://github.com/patclarke/claude-docker-container.git ~/src/claude-docker-container
+ln -sf ~/src/claude-docker-container/bin/cdc ~/bin/cdc
+```
+
+Then `cd ~/src/claude-docker-container && git pull` whenever you want the
+latest.
 
 ## Quick start
 
