@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# cc — run Claude Code inside a Docker Sandbox microVM
-# https://github.com/patclarke/claude-docker-sandbox
+# cdc — run Claude Code inside a Docker Sandbox microVM
+# https://github.com/patclarke/claude-docker-container
 
 set -euo pipefail
 
-readonly CC_VERSION="0.1.0"
-readonly CC_CONFIG_DIR="$HOME/.config/cc"
-readonly CC_MOUNTS_FILE="$CC_CONFIG_DIR/mounts.conf"
+readonly CDC_VERSION="0.1.0"
+readonly CDC_CONFIG_DIR="$HOME/.config/cdc"
+readonly CDC_MOUNTS_FILE="$CDC_CONFIG_DIR/mounts.conf"
 
 die() {
-	echo "cc: $*" >&2
+	echo "cdc: $*" >&2
 	exit 1
 }
 
@@ -38,22 +38,22 @@ die_preflight() {
 	case "$1" in
 	sbx)
 		cat >&2 <<'EOF'
-cc: sbx not found on PATH.
+cdc: sbx not found on PATH.
     Install:   brew install docker/tap/sbx
     Then run:  sbx login
 EOF
 		;;
 	docker)
-		echo "cc: Docker Desktop is not responding. Run 'docker info' to debug." >&2
+		echo "cdc: Docker Desktop is not responding. Run 'docker info' to debug." >&2
 		;;
 	sbx_auth)
-		echo "cc: sbx is not authenticated. Run: sbx login" >&2
+		echo "cdc: sbx is not authenticated. Run: sbx login" >&2
 		;;
 	claude_dir)
-		echo "cc: $HOME/.claude is missing or not writable. Session history would be lost." >&2
+		echo "cdc: $HOME/.claude is missing or not writable. Session history would be lost." >&2
 		;;
 	claude_binary)
-		echo "cc: claude binary not found on PATH." >&2
+		echo "cdc: claude binary not found on PATH." >&2
 		;;
 	esac
 	exit 1
@@ -63,7 +63,7 @@ ensure_docker_running() {
 	if docker info >/dev/null 2>&1; then
 		return 0
 	fi
-	echo "cc: Docker Desktop is not running. Starting it..." >&2
+	echo "cdc: Docker Desktop is not running. Starting it..." >&2
 	open -a Docker 2>/dev/null || die "failed to launch Docker Desktop."
 	local waited=0
 	while ((waited < 30)); do
@@ -80,7 +80,7 @@ ensure_docker_running() {
 }
 
 run_preflight() {
-	if [[ $CC_NO_SANDBOX -eq 1 ]]; then
+	if [[ $CDC_NO_SANDBOX -eq 1 ]]; then
 		preflight_claude_binary || die_preflight claude_binary
 		return 0
 	fi
@@ -115,22 +115,22 @@ run_rm() {
 	preflight_sbx_auth || die_preflight sbx_auth
 
 	local target
-	if [[ -n "$CC_RM_NAME" ]]; then
-		target="$CC_RM_NAME"
+	if [[ -n "$CDC_RM_NAME" ]]; then
+		target="$CDC_RM_NAME"
 	else
 		target="$(compute_sandbox_name)"
 	fi
 
 	if ! sandbox_exists "$target"; then
-		echo "cc: no sandbox named '$target'" >&2
+		echo "cdc: no sandbox named '$target'" >&2
 		return 1
 	fi
 
-	printf 'cc: remove sandbox "%s"? [y/N] ' "$target" >&2
+	printf 'cdc: remove sandbox "%s"? [y/N] ' "$target" >&2
 	local reply
 	read -r reply
 	if [[ "$reply" != "y" && "$reply" != "Y" ]]; then
-		echo "cc: aborted." >&2
+		echo "cdc: aborted." >&2
 		return 1
 	fi
 	sbx rm "$target"
@@ -138,7 +138,7 @@ run_rm() {
 
 run_doctor() {
 	local fails=0
-	echo "cc doctor"
+	echo "cdc doctor"
 	echo
 
 	if preflight_sbx; then
@@ -172,18 +172,18 @@ run_doctor() {
 	if preflight_claude_binary; then
 		print_check OK "claude installed on host (escape hatch available)"
 	else
-		print_check WARN "claude not on host    (--cc-no-sandbox will fail)"
+		print_check WARN "claude not on host    (--cdc-no-sandbox will fail)"
 	fi
 
 	echo
-	echo "Mount plan (from $CC_MOUNTS_FILE):"
+	echo "Mount plan (from $CDC_MOUNTS_FILE):"
 	load_mounts_config
 	resolve_mounts
-	if [[ ${#CC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then
+	if [[ ${#CDC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then
 		echo "  (empty)"
 	else
 		local entry mode path
-		for entry in "${CC_RESOLVED_MOUNTS[@]}"; do
+		for entry in "${CDC_RESOLVED_MOUNTS[@]}"; do
 			if [[ "$entry" == *:ro ]]; then
 				mode="RO"
 				path="${entry%:ro}"
@@ -196,9 +196,9 @@ run_doctor() {
 	fi
 
 	# shellcheck disable=SC2088
-	if [[ -f "$CC_MOUNTS_FILE" ]] && ! grep -q '~/\.claude/projects' "$CC_MOUNTS_FILE"; then
+	if [[ -f "$CDC_MOUNTS_FILE" ]] && ! grep -q '~/\.claude/projects' "$CDC_MOUNTS_FILE"; then
 		echo
-		echo "WARN: ~/.config/cc/mounts.conf looks out of date (missing ~/.claude/projects)."
+		echo "WARN: ~/.config/cdc/mounts.conf looks out of date (missing ~/.claude/projects)."
 		echo "      Consider deleting it to regenerate with current defaults."
 	fi
 
@@ -213,63 +213,63 @@ run_doctor() {
 
 usage() {
 	cat <<EOF
-cc $CC_VERSION — run Claude Code inside a Docker Sandbox microVM
+cdc $CDC_VERSION — run Claude Code inside a Docker Sandbox microVM
 
 USAGE:
-    cc [CC_FLAGS] [CLAUDE_ARGS...]
+    cdc [CDC_FLAGS] [CLAUDE_ARGS...]
 
-WRAPPER FLAGS (consumed by cc, not forwarded):
-    --cc-name <label>       Named sandbox for parallelism
-    --cc-mount <path>[:ro]  Add an extra mount for this invocation (repeatable)
-    --cc-no-mount <path>    Skip a config-file mount for this invocation (repeatable)
-    --cc-no-sandbox         Escape hatch — exec host claude directly
-    --cc-rm [name]          Remove the sandbox for cwd (or the named one)
-    --cc-ls                 List active sandboxes
-    --cc-dry-run            Print the resolved sbx run command, do not exec
-    --cc-doctor             Run preflight checks + show resolved mount list
-    --cc-help, -h           Show this help
+WRAPPER FLAGS (consumed by cdc, not forwarded):
+    --cdc-name <label>       Named sandbox for parallelism
+    --cdc-mount <path>[:ro]  Add an extra mount for this invocation (repeatable)
+    --cdc-no-mount <path>    Skip a config-file mount for this invocation (repeatable)
+    --cdc-no-sandbox         Escape hatch — exec host claude directly
+    --cdc-rm [name]          Remove the sandbox for cwd (or the named one)
+    --cdc-ls                 List active sandboxes
+    --cdc-dry-run            Print the resolved sbx run command, do not exec
+    --cdc-doctor             Run preflight checks + show resolved mount list
+    --cdc-help, -h           Show this help
 
 Everything else is forwarded to claude inside the sandbox.
 
 EXAMPLES:
-    cc                          # fresh session in cwd
-    cc -c                       # resume most recent session in cwd
-    cc --remote-control -c      # forward arbitrary claude flags
-    cc --cc-name exp-a -c       # named parallel sandbox
-    cc --cc-mount ~/notes:ro    # ad-hoc extra mount
-    cc --cc-no-sandbox -c       # bypass the sandbox entirely
+    cdc                          # fresh session in cwd
+    cdc -c                       # resume most recent session in cwd
+    cdc --remote-control -c      # forward arbitrary claude flags
+    cdc --cdc-name exp-a -c      # named parallel sandbox
+    cdc --cdc-mount ~/notes:ro   # ad-hoc extra mount
+    cdc --cdc-no-sandbox -c      # bypass the sandbox entirely
 
 CONFIG:
-    ~/.config/cc/mounts.conf    Durable mount policy (created on first run)
+    ~/.config/cdc/mounts.conf    Durable mount policy (created on first run)
 EOF
 }
 
 # Parser state — populated by parse_args
-CC_NAME=""
-CC_NO_SANDBOX=0
-CC_DRY_RUN=0
-CC_DOCTOR=0
-CC_LS=0
-CC_RM=0
-CC_RM_NAME=""
-CC_EXTRA_MOUNTS=()
-CC_SKIP_MOUNTS=()
-CC_CONFIG_MOUNTS=()
-CC_RESOLVED_MOUNTS=()
-CC_SBX_ARGV=()
-CC_CREATE_ARGV=()
+CDC_NAME=""
+CDC_NO_SANDBOX=0
+CDC_DRY_RUN=0
+CDC_DOCTOR=0
+CDC_LS=0
+CDC_RM=0
+CDC_RM_NAME=""
+CDC_EXTRA_MOUNTS=()
+CDC_SKIP_MOUNTS=()
+CDC_CONFIG_MOUNTS=()
+CDC_RESOLVED_MOUNTS=()
+CDC_SBX_ARGV=()
+CDC_CREATE_ARGV=()
 CLAUDE_ARGS=()
 
 write_default_mounts_file() {
-	mkdir -p "$CC_CONFIG_DIR"
-	cat >"$CC_MOUNTS_FILE" <<'EOF'
-# cc mounts config
+	mkdir -p "$CDC_CONFIG_DIR"
+	cat >"$CDC_MOUNTS_FILE" <<'EOF'
+# cdc mounts config
 # Format:  <path>[:ro]
 # No suffix = read-write. ":ro" = read-only.
 # Non-existent paths are skipped silently at launch.
 
 # Cross-project reference (read-only view of sibling repos).
-# cc automatically strips any mount that's an ancestor of $PWD, so
+# cdc automatically strips any mount that's an ancestor of $PWD, so
 # this is safe even when cwd is inside ~/workspace.
 ~/workspace:ro
 
@@ -286,19 +286,32 @@ write_default_mounts_file() {
 ~/.claude/plugins:ro
 ~/.claude/skills:ro
 
-# Credentials (RO — read by cc on the host, injected into the sandbox via sbx exec)
+# Credentials (RO — read by cdc on the host, injected into the sandbox via sbx exec)
 ~/.aws:ro
 ~/.config/gh:ro
 ~/.ssh:ro
 EOF
-	echo "cc: created $CC_MOUNTS_FILE with defaults." >&2
+	echo "cdc: created $CDC_MOUNTS_FILE with defaults." >&2
+}
+
+migrate_legacy_config() {
+	# One-time migration: if the new CDC_CONFIG_DIR doesn't exist yet but the
+	# legacy ~/.config/cc/ directory does, rename it. This runs at most once
+	# per user — after the rename, the legacy path is gone and subsequent
+	# calls are a no-op.
+	local legacy_dir="$HOME/.config/cc"
+	if [[ ! -d "$CDC_CONFIG_DIR" && -d "$legacy_dir" ]]; then
+		mv "$legacy_dir" "$CDC_CONFIG_DIR"
+		echo "cdc: migrated config from $legacy_dir to $CDC_CONFIG_DIR (one-time)" >&2
+	fi
 }
 
 load_mounts_config() {
-	if [[ ! -f "$CC_MOUNTS_FILE" ]]; then
+	migrate_legacy_config
+	if [[ ! -f "$CDC_MOUNTS_FILE" ]]; then
 		write_default_mounts_file
 	fi
-	CC_CONFIG_MOUNTS=()
+	CDC_CONFIG_MOUNTS=()
 	local line
 	while IFS= read -r line || [[ -n "$line" ]]; do
 		# strip inline comments and trailing whitespace
@@ -313,8 +326,8 @@ load_mounts_config() {
 		elif [[ "$line" == "~" ]]; then
 			line="$HOME"
 		fi
-		CC_CONFIG_MOUNTS+=("$line")
-	done <"$CC_MOUNTS_FILE"
+		CDC_CONFIG_MOUNTS+=("$line")
+	done <"$CDC_MOUNTS_FILE"
 }
 
 mount_path_only() {
@@ -331,11 +344,11 @@ mount_path_only() {
 }
 
 resolve_mounts() {
-	CC_RESOLVED_MOUNTS=("${CC_CONFIG_MOUNTS[@]+"${CC_CONFIG_MOUNTS[@]}"}")
+	CDC_RESOLVED_MOUNTS=("${CDC_CONFIG_MOUNTS[@]+"${CDC_CONFIG_MOUNTS[@]}"}")
 
-	# Append --cc-mount entries (expand ~)
+	# Append --cdc-mount entries (expand ~)
 	local extra expanded suffix path
-	for extra in "${CC_EXTRA_MOUNTS[@]+"${CC_EXTRA_MOUNTS[@]}"}"; do
+	for extra in "${CDC_EXTRA_MOUNTS[@]+"${CDC_EXTRA_MOUNTS[@]}"}"; do
 		suffix=""
 		path="$extra"
 		if [[ "$extra" == *:ro ]]; then
@@ -350,21 +363,21 @@ resolve_mounts() {
 		else
 			expanded="$path$suffix"
 		fi
-		CC_RESOLVED_MOUNTS+=("$expanded")
+		CDC_RESOLVED_MOUNTS+=("$expanded")
 	done
 
-	# Remove --cc-no-mount entries by absolute-path match
+	# Remove --cdc-no-mount entries by absolute-path match
 	local skip skip_abs new_list current current_abs
-	for skip in "${CC_SKIP_MOUNTS[@]+"${CC_SKIP_MOUNTS[@]}"}"; do
+	for skip in "${CDC_SKIP_MOUNTS[@]+"${CDC_SKIP_MOUNTS[@]}"}"; do
 		skip_abs="$(mount_path_only "$skip")"
 		new_list=()
-		for current in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+		for current in "${CDC_RESOLVED_MOUNTS[@]+"${CDC_RESOLVED_MOUNTS[@]}"}"; do
 			current_abs="$(mount_path_only "$current")"
 			if [[ "$current_abs" != "$skip_abs" ]]; then
 				new_list+=("$current")
 			fi
 		done
-		CC_RESOLVED_MOUNTS=("${new_list[@]+"${new_list[@]}"}")
+		CDC_RESOLVED_MOUNTS=("${new_list[@]+"${new_list[@]}"}")
 	done
 	filter_existing_mounts
 	strip_cwd_ancestors
@@ -372,33 +385,33 @@ resolve_mounts() {
 
 filter_existing_mounts() {
 	local kept=() entry path
-	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+	for entry in "${CDC_RESOLVED_MOUNTS[@]+"${CDC_RESOLVED_MOUNTS[@]}"}"; do
 		path="$(mount_path_only "$entry")"
 		if [[ -e "$path" ]]; then
 			kept+=("$entry")
 		fi
 	done
-	CC_RESOLVED_MOUNTS=("${kept[@]+"${kept[@]}"}")
+	CDC_RESOLVED_MOUNTS=("${kept[@]+"${kept[@]}"}")
 }
 
 strip_cwd_ancestors() {
 	local pwd_abs kept=() entry path
 	pwd_abs="$(pwd -P)"
-	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+	for entry in "${CDC_RESOLVED_MOUNTS[@]+"${CDC_RESOLVED_MOUNTS[@]}"}"; do
 		path="$(mount_path_only "$entry")"
 		# Strip if cwd is strictly UNDER this mount (ancestor). Equal is fine — that's the primary.
 		if [[ "$pwd_abs" == "$path"/* && "$pwd_abs" != "$path" ]]; then
-			echo "cc: stripping ancestor mount $path (cwd is inside it)" >&2
+			echo "cdc: stripping ancestor mount $path (cwd is inside it)" >&2
 			continue
 		fi
 		kept+=("$entry")
 	done
-	CC_RESOLVED_MOUNTS=("${kept[@]+"${kept[@]}"}")
+	CDC_RESOLVED_MOUNTS=("${kept[@]+"${kept[@]}"}")
 }
 
 compute_sandbox_name() {
-	if [[ -n "$CC_NAME" ]]; then
-		echo "$CC_NAME"
+	if [[ -n "$CDC_NAME" ]]; then
+		echo "$CDC_NAME"
 		return 0
 	fi
 	local abs basename hash
@@ -424,15 +437,15 @@ inject_credentials() {
 			cat > /home/agent/.claude/.credentials.json &&
 			chmod 600 /home/agent/.claude/.credentials.json
 		' >/dev/null 2>&1; then
-		echo "cc: no Claude Code credentials in macOS Keychain, or injection failed; sandbox claude may prompt /login" >&2
+		echo "cdc: no Claude Code credentials in macOS Keychain, or injection failed; sandbox claude may prompt /login" >&2
 	fi
 	return 0
 }
 
 setup_share_symlinks() {
 	local name="$1" home="$HOME"
-	# Redirect stdin from /dev/null so this sbx exec doesn't steal cc's stdin.
-	# Without the redirect, sbx exec inherits cc's stdin and consumes it, which
+	# Redirect stdin from /dev/null so this sbx exec doesn't steal cdc's stdin.
+	# Without the redirect, sbx exec inherits cdc's stdin and consumes it, which
 	# leaves the final `sbx exec -i ... claude` attach with no stdin and claude
 	# gets SIGKILL'd (exit 137).
 	sbx exec "$name" sh -c "
@@ -484,7 +497,7 @@ build_sbx_argv() {
 	# terminal/color variables into the sandbox. sbx exec does not inherit
 	# the host's TERM/COLORTERM/etc, so without this claude defaults to
 	# minimal/no-color output.
-	CC_SBX_ARGV=(
+	CDC_SBX_ARGV=(
 		sbx exec "$exec_flags" -w "$pwd_abs" "$name"
 		env
 		"TERM=${TERM:-xterm-256color}"
@@ -494,25 +507,25 @@ build_sbx_argv() {
 		claude
 	)
 	if [[ ${#CLAUDE_ARGS[@]} -gt 0 ]]; then
-		CC_SBX_ARGV+=("${CLAUDE_ARGS[@]}")
+		CDC_SBX_ARGV+=("${CLAUDE_ARGS[@]}")
 	fi
 }
 
 build_create_argv() {
-	# Build the sbx create argv for --cc-dry-run display and actual creation.
+	# Build the sbx create argv for --cdc-dry-run display and actual creation.
 	local name pwd_abs
 	name="$(compute_sandbox_name)"
 	pwd_abs="$(pwd -P)"
 
-	CC_CREATE_ARGV=(sbx create claude "$pwd_abs" --name "$name")
+	CDC_CREATE_ARGV=(sbx create claude "$pwd_abs" --name "$name")
 
 	local entry path
-	for entry in "${CC_RESOLVED_MOUNTS[@]+"${CC_RESOLVED_MOUNTS[@]}"}"; do
+	for entry in "${CDC_RESOLVED_MOUNTS[@]+"${CDC_RESOLVED_MOUNTS[@]}"}"; do
 		path="$(mount_path_only "$entry")"
 		if [[ "$path" == "$pwd_abs" ]]; then
 			continue
 		fi
-		CC_CREATE_ARGV+=("$entry")
+		CDC_CREATE_ARGV+=("$entry")
 	done
 }
 
@@ -525,9 +538,9 @@ run_sandbox() {
 	if ! sandbox_exists "$name"; then
 		local create_argv=()
 		build_create_argv
-		create_argv=("${CC_CREATE_ARGV[@]}")
+		create_argv=("${CDC_CREATE_ARGV[@]}")
 		"${create_argv[@]}" || {
-			echo "cc: failed to create sandbox $name" >&2
+			echo "cdc: failed to create sandbox $name" >&2
 			return 1
 		}
 	fi
@@ -545,54 +558,54 @@ run_sandbox() {
 	# practice; under 1s is unreliable.
 	sleep 1
 
-	# Step 4: exec into sbx exec so cc's process becomes sbx exec entirely.
+	# Step 4: exec into sbx exec so cdc's process becomes sbx exec entirely.
 	# Using `exec` avoids any parent-child stdio/signal layering issues
-	# between cc and the attach command.
-	exec "${CC_SBX_ARGV[@]}"
+	# between cdc and the attach command.
+	exec "${CDC_SBX_ARGV[@]}"
 }
 
 parse_args() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
-		--cc-help | -h)
+		--cdc-help | -h)
 			usage
 			exit 0
 			;;
-		--cc-name)
-			[[ $# -ge 2 ]] || die "--cc-name requires a value"
-			CC_NAME="$2"
+		--cdc-name)
+			[[ $# -ge 2 ]] || die "--cdc-name requires a value"
+			CDC_NAME="$2"
 			shift 2
 			;;
-		--cc-mount)
-			[[ $# -ge 2 ]] || die "--cc-mount requires a <path>[:ro] value"
-			CC_EXTRA_MOUNTS+=("$2")
+		--cdc-mount)
+			[[ $# -ge 2 ]] || die "--cdc-mount requires a <path>[:ro] value"
+			CDC_EXTRA_MOUNTS+=("$2")
 			shift 2
 			;;
-		--cc-no-mount)
-			[[ $# -ge 2 ]] || die "--cc-no-mount requires a path"
-			CC_SKIP_MOUNTS+=("$2")
+		--cdc-no-mount)
+			[[ $# -ge 2 ]] || die "--cdc-no-mount requires a path"
+			CDC_SKIP_MOUNTS+=("$2")
 			shift 2
 			;;
-		--cc-no-sandbox)
-			CC_NO_SANDBOX=1
+		--cdc-no-sandbox)
+			CDC_NO_SANDBOX=1
 			shift
 			;;
-		--cc-dry-run)
-			CC_DRY_RUN=1
+		--cdc-dry-run)
+			CDC_DRY_RUN=1
 			shift
 			;;
-		--cc-doctor)
-			CC_DOCTOR=1
+		--cdc-doctor)
+			CDC_DOCTOR=1
 			shift
 			;;
-		--cc-ls)
-			CC_LS=1
+		--cdc-ls)
+			CDC_LS=1
 			shift
 			;;
-		--cc-rm)
-			CC_RM=1
+		--cdc-rm)
+			CDC_RM=1
 			if [[ $# -ge 2 && "$2" != -* ]]; then
-				CC_RM_NAME="$2"
+				CDC_RM_NAME="$2"
 				shift 2
 			else
 				shift
@@ -614,17 +627,17 @@ dry_run_output() {
 	local pwd_abs
 	pwd_abs="$(pwd -P)"
 
-	echo "# cc dry-run"
+	echo "# cdc dry-run"
 	echo "CWD=$pwd_abs"
 	echo "SANDBOX_NAME=$(compute_sandbox_name)"
-	echo "NO_SANDBOX=$CC_NO_SANDBOX"
+	echo "NO_SANDBOX=$CDC_NO_SANDBOX"
 	echo
 	echo "MOUNTS (resolved, existing only):"
-	if [[ ${#CC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then
+	if [[ ${#CDC_RESOLVED_MOUNTS[@]} -eq 0 ]]; then
 		echo "  (none)"
 	else
 		local m
-		for m in "${CC_RESOLVED_MOUNTS[@]}"; do
+		for m in "${CDC_RESOLVED_MOUNTS[@]}"; do
 			echo "  $m"
 		done
 	fi
@@ -632,31 +645,31 @@ dry_run_output() {
 	echo "CLAUDE_ARGS: ${CLAUDE_ARGS[*]:-<none>}"
 	echo
 	echo "COMMAND:"
-	printf '  %q ' "${CC_SBX_ARGV[@]}"
+	printf '  %q ' "${CDC_SBX_ARGV[@]}"
 	echo
 }
 
 main() {
 	parse_args "$@"
-	if [[ $CC_DOCTOR -eq 1 ]]; then
+	if [[ $CDC_DOCTOR -eq 1 ]]; then
 		run_doctor
 		return $?
 	fi
-	if [[ $CC_LS -eq 1 ]]; then
+	if [[ $CDC_LS -eq 1 ]]; then
 		run_ls
 		return $?
 	fi
-	if [[ $CC_RM -eq 1 ]]; then
+	if [[ $CDC_RM -eq 1 ]]; then
 		run_rm
 		return $?
 	fi
-	if [[ $CC_DRY_RUN -eq 1 ]]; then
+	if [[ $CDC_DRY_RUN -eq 1 ]]; then
 		dry_run_output
 		return 0
 	fi
 	run_preflight || return 1
 
-	if [[ $CC_NO_SANDBOX -eq 1 ]]; then
+	if [[ $CDC_NO_SANDBOX -eq 1 ]]; then
 		# Escape hatch: bypass sbx entirely, exec host claude directly.
 		exec claude "${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}"
 	fi
