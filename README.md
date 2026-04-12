@@ -7,7 +7,7 @@ without losing sleep.
 
 If you use Claude Code, you've probably tried `--dangerously-skip-permissions`.
 You stop answering "can I run `git status`?" twenty times an hour. Your
-velocity doubles. You also know you're one bad prompt injection away from a
+velocity doubles. You also know you're one bad prompt away from a
 really bad day — the same shell that can run `git status` can run
 `aws s3 rb`, `gh repo delete`, or `rm -rf ~`.
 
