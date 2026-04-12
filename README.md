@@ -345,8 +345,21 @@ you don't have any sandboxes yet).
 
 ### Step 5: install `cdc`
 
-`cdc` itself is a single bash script. Drop it into `~/bin` and put that
-directory on your PATH:
+`cdc` itself is a single bash script. The easiest way to install it is
+with the one-liner installer, which downloads `cdc` to `~/bin`, detects
+your shell (zsh or bash), and adds `~/bin` to your PATH automatically:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/patclarke/claude-docker-container/main/install.sh | bash
+```
+
+The installer also runs `cdc --cdc-doctor` at the end as a health check.
+
+**After the install finishes, open a new terminal** so the PATH change
+takes effect, then skip to Step 6.
+
+<details>
+<summary>Prefer to install manually?</summary>
 
 ```bash
 # Create ~/bin and download cdc into it
@@ -373,10 +386,12 @@ which cdc
 
 Should print: `/Users/<your-username>/bin/cdc`
 
+</details>
+
 ### Step 6: final health check
 
-`cdc` has a built-in health check that runs through everything from Steps
-2–4 and reports the status:
+If you used the one-liner installer above, the doctor already ran. In a
+**new terminal** (so PATH is updated), verify everything:
 
 ```bash
 cdc --cdc-doctor
