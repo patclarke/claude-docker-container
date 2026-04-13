@@ -515,6 +515,46 @@ setup_share_symlinks() {
 	" </dev/null >/dev/null 2>&1 || true
 }
 
+install_sandbox_notes() {
+	# Write a user-level CLAUDE.md into the sandbox so claude sessions pick up
+	# cdc-specific guidance (GitHub auth via sbx proxy, gh 2.46.0 quirks).
+	# Overwritten on every attach so the guidance stays in sync with the
+	# installed cdc version.
+	local name="$1"
+	sbx exec -i "$name" sh -c 'cat > /home/agent/.claude/CLAUDE.md' <<'NOTES' >/dev/null 2>&1 || true
+# cdc sandbox notes
+
+You are running inside a cdc (claude-docker-container) Docker Sandbox
+microVM. Your host's credentials reach you through sbx's network proxy,
+not through files on disk.
+
+## GitHub access
+
+GitHub auth is injected by the sbx proxy at the network layer when no
+Authorization header is present. The token comes from the host-side
+`sbx secret set -g github` value.
+
+- `git` (HTTPS and SSH), `curl https://api.github.com/...`, and
+  `gh api <endpoint>` all work transparently. Do not run `gh auth login`.
+- If `gh` reports "please run gh auth login" or you see HTTP 401 from
+  GitHub, the fix is host-side. Ask the user to run
+  `sbx secret set -g github -t "$(gh auth token)"` on their Mac, then
+  recreate this sandbox with `cdc --cdc-rm`. Do not try to authenticate
+  from inside the sandbox.
+
+## gh CLI quirks
+
+The baked-in `gh` is 2.46.0, which has a known bug with the deprecated
+`repository.issue.projectCards` GraphQL field. Plain `gh issue view <N>`
+and `gh pr view <N>` exit 1 with only a deprecation warning and no data.
+Use any of these instead — all return full data:
+
+- `gh issue view <N> --json title,body,state,labels,comments`
+- `gh api /repos/OWNER/REPO/issues/<N>`
+- `gh api graphql -f query='...'`
+NOTES
+}
+
 build_sbx_argv() {
 	# Show the attach form that actually runs. We use `sbx exec` instead of
 	# `sbx run` because sbx's agent launcher misbehaves with our credential
@@ -604,6 +644,9 @@ run_sandbox() {
 
 	# Step 3: set up sharing symlinks (idempotent)
 	setup_share_symlinks "$name"
+
+	# Step 3b: install sandbox-specific CLAUDE.md notes (idempotent, overwrites)
+	install_sandbox_notes "$name"
 
 	# sbx race workaround: rapid successive sbx calls leave the sbx daemon in
 	# a state where the next interactive exec is SIGKILL'd at startup (exit 137).
