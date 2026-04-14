@@ -225,8 +225,13 @@ a PR:
 4. **Worktree sanity.** Run `cdc` from a `.worktrees/feat-foo` directory under
    another repo and confirm the primary mount is the worktree path, not the
    main checkout.
-5. **Failure spot checks.** Quit Docker Desktop mid-session, Ctrl-C during the
-   30 s Docker wait, run from a directory outside `~/workspace`.
+5. **Failure spot checks.** Exercise both Docker Desktop presence cases:
+   (a) Docker Desktop present + running → quit mid-session, Ctrl-C during the
+   30 s Docker wait, confirm `cdc` surfaces the failure via `sbx` output;
+   (b) Docker Desktop absent entirely (rename `/Applications/Docker.app` or
+   test on a machine without it) → confirm `cdc` proceeds to `sbx` without
+   a Docker-related hard-fail and `--cdc-doctor` shows an `INFO` row.
+   Also: run from a directory outside `~/workspace`.
 
 Shell lint:
 
