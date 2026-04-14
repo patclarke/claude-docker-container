@@ -49,16 +49,16 @@ execution.
    removals. Strip ancestor mounts. Compute a deterministic sandbox name from
    cwd. Build the final `sbx` argv.
 3. **Exec.** If the named sandbox doesn't exist, create it with
-   `sbx create claude <primary> <mounts>`. If it exists but is stopped (cdc's
-   own post-exit `sbx stop` leaves it that way), bring it back up with
-   `sbx start`. Then inject credentials via `sbx exec -i`. Then create
-   sharing symlinks via `sbx exec`. Finally attach with
-   `sbx exec -it <name> env ... claude <claude-args>` in the foreground
+   `sbx create claude <primary> <mounts>`. Then inject credentials via
+   `sbx exec -i`, create sharing symlinks via `sbx exec`, and finally attach
+   with `sbx exec -it <name> env ... claude <claude-args>` in the foreground
    (not via `exec` — we need to return to cdc after claude exits for cleanup).
-   If that first attach exits 137 (sbx rapid-call race — see lesson 5), retry
-   once after a longer wait. After claude exits, `cdc` runs `sbx stop` to
-   free the microVM's resources. Pass `--cdc-keep-running` to skip the stop.
-   Propagate sbx's exit code.
+   `sbx exec` auto-starts a stopped sandbox (per `sbx exec --help`), so a
+   prior cdc session that ended in `sbx stop` re-attaches transparently — no
+   explicit start step needed. If the first attach exits 137 (sbx rapid-call
+   race — see lesson 5), retry once after a longer wait. After claude exits,
+   `cdc` runs `sbx stop` to free the microVM's resources. Pass
+   `--cdc-keep-running` to skip the stop. Propagate sbx's exit code.
 
 The `--cdc-dry-run`, `--cdc-doctor`, and `--cdc-no-sandbox` flags short-circuit
 the exec phase in different ways; they still run parse and the relevant parts
@@ -138,9 +138,10 @@ Key sbx facts that govern the implementation:
   with "sandbox X already exists and can't be given new workspaces". The
   correct flow: `sbx create claude <primary> <mounts>` once, then
   `sbx exec` on every subsequent attach.
-- **Stopped vs. running:** `sbx exec` fails on a stopped sandbox. Since cdc
-  auto-stops after claude exits, every subsequent attach must first check
-  status via `sbx ls` and call `sbx start` if needed.
+- **Stopped vs. running:** `sbx exec` auto-starts a stopped sandbox before
+  running the command (per `sbx exec --help`). cdc relies on this — the
+  cdc-side post-exit `sbx stop` is for resource cleanup, and the next attach
+  re-starts the sandbox transparently. There is no `sbx start` subcommand.
 
 ## Code style
 

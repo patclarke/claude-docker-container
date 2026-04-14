@@ -413,30 +413,6 @@ sandbox_exists() {
 	sbx ls 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$name"
 }
 
-sandbox_status() {
-	# Prints the STATUS column for a sandbox (running | stopped | ""), stripping
-	# ANSI color codes sbx emits (e.g. "\033[32mrunning\033[0m"). Empty output
-	# means the sandbox does not exist.
-	local name="$1"
-	sbx ls 2>/dev/null |
-		awk -v n="$name" 'NR>1 && $1 == n {print $3}' |
-		sed -E 's/\x1b\[[0-9;]*m//g'
-}
-
-ensure_sandbox_running() {
-	# `sbx exec` on a stopped sandbox fails. If the sandbox exists but is
-	# stopped (e.g. cdc's own post-exit `sbx stop` from the previous run), bring
-	# it back up before injecting credentials and attaching.
-	local name="$1"
-	if [[ "$(sandbox_status "$name")" != "stopped" ]]; then
-		return 0
-	fi
-	sbx start "$name" >/dev/null 2>&1 || {
-		echo "cdc: failed to start existing sandbox $name" >&2
-		return 1
-	}
-}
-
 inject_credentials() {
 	local name="$1"
 	# SECURITY: never assign the token to a shell variable — `bash -x` would
@@ -595,8 +571,9 @@ run_sandbox() {
 	local name
 	name="$(compute_sandbox_name)"
 
-	# Step 1: ensure the sandbox exists and is running. Create it if new; start
-	# it if a previous cdc run (or manual `sbx stop`) left it stopped.
+	# Step 1: create the sandbox if it doesn't exist yet. If it exists but is
+	# stopped (cdc's own post-exit `sbx stop` leaves it that way), `sbx exec`
+	# below will auto-start it — that's documented in `sbx exec --help`.
 	if ! sandbox_exists "$name"; then
 		local create_argv=()
 		build_create_argv
@@ -605,8 +582,6 @@ run_sandbox() {
 			echo "cdc: failed to create sandbox $name" >&2
 			return 1
 		}
-	else
-		ensure_sandbox_running "$name" || return 1
 	fi
 
 	# Tell the user cdc is still driving — `sbx create` ends by printing
