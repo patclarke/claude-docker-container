@@ -18,10 +18,6 @@ preflight_sbx() {
 	command -v sbx >/dev/null 2>&1
 }
 
-preflight_docker() {
-	docker info >/dev/null 2>&1 && docker ps >/dev/null 2>&1
-}
-
 docker_desktop_installed() {
 	# Docker Desktop ships as /Applications/Docker.app on macOS. On Linux and
 	# Windows the concept doesn't apply; return false so callers skip the
@@ -61,9 +57,6 @@ cdc: sbx not found on PATH.
     Install:   brew install docker/tap/sbx
     Then run:  sbx login
 EOF
-		;;
-	docker)
-		echo "cdc: Docker Desktop is not responding. Run 'docker info' to debug." >&2
 		;;
 	sbx_auth)
 		echo "cdc: sbx is not authenticated. Run: sbx login" >&2
@@ -115,7 +108,6 @@ run_preflight() {
 	fi
 	preflight_sbx || die_preflight sbx
 	ensure_docker_running
-	preflight_docker || die_preflight docker
 	preflight_sbx_auth || die_preflight sbx_auth
 	preflight_claude_dir || die_preflight claude_dir
 	return 0
