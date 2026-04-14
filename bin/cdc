@@ -413,6 +413,35 @@ sandbox_exists() {
 	sbx ls 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$name"
 }
 
+CDC_SPINNER_PID=""
+
+spinner_start() {
+	# Animated single-line spinner on stderr so the user sees cdc making
+	# progress during the otherwise-silent inject+symlink+sleep phase between
+	# `sbx create` and the foreground `sbx exec` attach. No-op when stderr
+	# isn't a TTY (CI, piped output) — a spinner there is just noise.
+	[[ -t 2 ]] || return 0
+	local msg="$1"
+	(
+		local frames='-\|/'
+		local i=0
+		trap 'printf "\r\033[K" >&2; exit 0' TERM
+		while :; do
+			printf '\r%s %s' "${frames:i++%4:1}" "$msg" >&2
+			sleep 0.15
+		done
+	) &
+	CDC_SPINNER_PID=$!
+}
+
+spinner_stop() {
+	[[ -n "$CDC_SPINNER_PID" ]] || return 0
+	kill "$CDC_SPINNER_PID" 2>/dev/null || true
+	wait "$CDC_SPINNER_PID" 2>/dev/null || true
+	printf '\r\033[K' >&2
+	CDC_SPINNER_PID=""
+}
+
 inject_credentials() {
 	local name="$1"
 	# SECURITY: never assign the token to a shell variable — `bash -x` would
@@ -586,8 +615,11 @@ run_sandbox() {
 
 	# Tell the user cdc is still driving — `sbx create` ends by printing
 	# "To connect to this sandbox, run: sbx run <name>", which looks like an
-	# instruction but isn't (cdc is about to attach automatically).
-	echo "cdc: connecting claude to sandbox $name..." >&2
+	# instruction but isn't (cdc is about to attach automatically). The
+	# spinner runs through the silent prep phase so a slow inject doesn't
+	# look like a freeze; it's stopped before the foreground sbx exec so it
+	# doesn't fight sbx's own output.
+	spinner_start "connecting claude to sandbox $name"
 
 	# Step 2: inject credentials (idempotent, refreshes token each run)
 	inject_credentials "$name"
@@ -603,6 +635,7 @@ run_sandbox() {
 	# A brief pause before the attach lets the daemon settle; on the rare
 	# occasion the pause isn't enough, retry once with a longer wait.
 	sleep 1
+	spinner_stop
 
 	# Step 4: run claude in the foreground. We use a foreground call (not exec)
 	# so we can run cleanup (sbx stop) after claude exits.
