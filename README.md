@@ -33,14 +33,14 @@ Run Claude Code in dangerous mode safely inside a fast, easy-to-use microVM that
 | Uses your host setup | Rebuild tooling/config per project               | Fresh VM; copy configs manually         | Reuses host Claude install, plugins, skills |
 | Isolation strength   | Container                                        | MicroVM                                 | MicroVM (same as sbx) |
 | Mount control        | `devcontainer.json` mounts                        | `sbx mount ...` flags                   | Smart mounts: project RW; plugins/skills RO |
-| Credential handling  | Whatever you bind in                             | Manual; read-write by default           | Injects Claude token; `~/.aws`, `~/.config/gh`, `~/.ssh` RO |
+| Credential handling  | Whatever you bind in                             | Manual; read-write by default           | Injects Claude token; `~/.aws`, `~/.ssh` RO; sbx `github` secret for git |
 | Claude workflow      | Use `claude` inside container                    | `sbx run ...` inside VM                 | Keep typing `claude ...`; prefix with `cdc` |
 | Performance          | Cold start slow, steady OK                       | Cold start seconds                      | Cold start seconds; interactive feels host-like |
 | Retain context       | Per-container unless you mount it                | Per-sandbox; resets if you recreate it  | Yes; shares `~/.claude/projects` with host |
 
 ## Safety at a glance
 
-- **Read-only mounts:** `~/.claude/plugins`, `~/.claude/skills`, `~/.aws`, `~/.config/gh`, `~/.ssh`, injected Claude OAuth token.
+- **Read-only mounts:** `~/.claude/plugins`, `~/.claude/skills`, `~/.aws`, `~/.ssh`, injected Claude OAuth token.
 - **Read-write mounts:** Current project path; `~/.claude/projects/` for session history.
 - **Impossible:** Access files outside the mount list; modify plugins/skills code; swap your credentials; escape the microVM.
 
@@ -114,7 +114,10 @@ By default, the sandbox has unrestricted network access and can use any
 credentials you've mounted. **A read-only mount of `~/.aws` does not mean
 read-only AWS permissions.** The agent can read the credential file and use
 it to make any AWS API call that credential allows -- including destructive
-ones. Same for `~/.config/gh` (GitHub) and `~/.ssh` (git/SSH).
+ones. Same for `~/.ssh` (git/SSH). GitHub auth is handled differently — the sbx
+proxy injects a token from the `github` global secret on github.com traffic
+— same credential-scoping caveat applies: a runaway agent can make any
+GitHub API call that token allows.
 
 If you're worried about the agent making unwanted API calls, sandboxing
 doesn't solve that. Credential scoping does. See
@@ -598,7 +601,6 @@ Written automatically the first time you run `cdc`:
 
 # Credentials (RO -- usable by tools in the sandbox, cannot be overwritten)
 ~/.aws:ro
-~/.config/gh:ro
 ~/.ssh:ro
 ```
 
@@ -618,7 +620,6 @@ user-level `~/.claude/CLAUDE.md` is not shared. Project-level `CLAUDE.md` in
 | `~/.claude/plugins`     | RO   | Host plugins available in sandbox; sandbox cannot modify them   |
 | `~/.claude/skills`      | RO   | Host skills available in sandbox; sandbox cannot modify them    |
 | `~/.aws`                | RO   | Credentials readable by agent; **see credential scoping above** |
-| `~/.config/gh`          | RO   | `gh` CLI auth; **see credential scoping above**                 |
 | `~/.ssh`                | RO   | git over ssh; **see credential scoping above**                  |
 
 ### Customizing
