@@ -42,6 +42,25 @@ preflight_github_secret() {
 	sbx secret list -g 2>/dev/null | awk '$2 == "github" {f=1} END {exit !f}'
 }
 
+ensure_github_secret() {
+	# Silent safety net: if the sbx `github` global secret is missing and the
+	# host's `gh` is authenticated, set the secret so GitHub auth works inside
+	# the sandbox with no user ceremony. If either condition is absent, stay
+	# silent — --cdc-doctor is where diagnostics live.
+	# Piping through stdin avoids the token touching a shell variable so
+	# `bash -x cdc` does not leak it (CLAUDE.md lesson 6).
+	if preflight_github_secret; then
+		return 0
+	fi
+	if ! command -v gh >/dev/null 2>&1; then
+		return 0
+	fi
+	if ! gh auth status >/dev/null 2>&1; then
+		return 0
+	fi
+	gh auth token 2>/dev/null | sbx secret set -g github >/dev/null 2>&1 || true
+}
+
 die_preflight() {
 	case "$1" in
 	sbx)
@@ -152,7 +171,7 @@ run_doctor() {
 	if preflight_github_secret; then
 		print_check OK "sbx github secret set (git over HTTPS will work inside sandbox)"
 	else
-		print_check WARN "no sbx github secret    (fix: sbx secret set -g github -t \"\$(gh auth token)\")"
+		print_check WARN "no sbx github secret, host 'gh auth token' is empty. If you use GitHub from inside the sandbox, run 'gh auth login' on your Mac, then rerun cdc. If you don't use GitHub, ignore this."
 	fi
 
 	echo
@@ -274,8 +293,11 @@ write_default_mounts_file() {
 ~/.claude/skills:ro
 
 # Credentials (RO — read by cdc on the host, injected into the sandbox via sbx exec)
+# GitHub auth is handled separately: the sbx proxy injects the token from the
+# `github` global secret on api.github.com / github.com requests. cdc's preflight
+# sets this automatically from your host `gh auth token` when possible.
+# Escape hatch if you prefer the old mount: --cdc-mount ~/.config/gh:ro
 ~/.aws:ro
-~/.config/gh:ro
 ~/.ssh:ro
 EOF
 	echo "cdc: created $CDC_MOUNTS_FILE with defaults." >&2
@@ -791,6 +813,7 @@ main() {
 		exec claude "${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}"
 	fi
 
+	ensure_github_secret
 	load_mounts_config
 	resolve_mounts
 	run_sandbox
