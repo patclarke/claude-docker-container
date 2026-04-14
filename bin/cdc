@@ -82,6 +82,12 @@ ensure_docker_running() {
 	if docker info >/dev/null 2>&1; then
 		return 0
 	fi
+	# Docker Desktop is a macOS-only concept and is optional: sbx runs
+	# standalone on Apple silicon, Windows, and Linux. If the app isn't
+	# installed, skip silently and let sbx surface its own errors.
+	if ! docker_desktop_installed; then
+		return 0
+	fi
 	echo "cdc: Docker Desktop is not running. Starting it..." >&2
 	open -a Docker 2>/dev/null || die "failed to launch Docker Desktop."
 	local waited=0
@@ -95,7 +101,11 @@ ensure_docker_running() {
 		printf '.' >&2
 	done
 	echo >&2
-	die "Docker Desktop failed to start within 30s."
+	# Even if the 30s wait expires, don't die — sbx may still succeed without
+	# a running Docker Desktop (it uses virtualization framework directly on
+	# Apple silicon). Just warn and continue.
+	echo "cdc: Docker Desktop did not start within 30s; continuing (sbx may still work)." >&2
+	return 0
 }
 
 run_preflight() {
