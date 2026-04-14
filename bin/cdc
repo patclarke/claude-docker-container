@@ -58,7 +58,7 @@ ensure_github_secret() {
 	if ! gh auth status >/dev/null 2>&1; then
 		return 0
 	fi
-	gh auth token 2>/dev/null | sbx secret set -g github --stdin >/dev/null 2>&1 || true
+	gh auth token 2>/dev/null | sbx secret set -g github >/dev/null 2>&1 || true
 }
 
 die_preflight() {
