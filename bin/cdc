@@ -609,6 +609,11 @@ run_sandbox() {
 		ensure_sandbox_running "$name" || return 1
 	fi
 
+	# Tell the user cdc is still driving — `sbx create` ends by printing
+	# "To connect to this sandbox, run: sbx run <name>", which looks like an
+	# instruction but isn't (cdc is about to attach automatically).
+	echo "cdc: connecting claude to sandbox $name..." >&2
+
 	# Step 2: inject credentials (idempotent, refreshes token each run)
 	inject_credentials "$name"
 
