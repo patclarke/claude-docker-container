@@ -50,11 +50,15 @@ execution.
    cwd. Build the final `sbx` argv.
 3. **Exec.** If the named sandbox doesn't exist, create it with
    `sbx create claude <primary> <mounts>`. Then inject credentials via
-   `sbx exec -i`. Then create sharing symlinks via `sbx exec`. Finally attach
+   `sbx exec -i`, create sharing symlinks via `sbx exec`, and finally attach
    with `sbx exec -it <name> env ... claude <claude-args>` in the foreground
    (not via `exec` — we need to return to cdc after claude exits for cleanup).
-   After claude exits, `cdc` runs `sbx stop` to free the microVM's resources.
-   Pass `--cdc-keep-running` to skip the stop. Propagate sbx's exit code.
+   `sbx exec` auto-starts a stopped sandbox (per `sbx exec --help`), so a
+   prior cdc session that ended in `sbx stop` re-attaches transparently — no
+   explicit start step needed. If the first attach exits 137 (sbx rapid-call
+   race — see lesson 5), retry once after a longer wait. After claude exits,
+   `cdc` runs `sbx stop` to free the microVM's resources. Pass
+   `--cdc-keep-running` to skip the stop. Propagate sbx's exit code.
 
 The `--cdc-dry-run`, `--cdc-doctor`, and `--cdc-no-sandbox` flags short-circuit
 the exec phase in different ways; they still run parse and the relevant parts
@@ -100,8 +104,10 @@ Additional runtime surprises found during implementation:
 5. **sbx rapid-call race:** Running several sbx subcommands back-to-back
    (`create`, `exec` for inject, `exec` for symlinks, final `exec` to
    attach) leaves the sbx daemon in a state where the next interactive
-   exec is SIGKILL'd at startup. A 1-second `sleep` before the final
-   attach avoids this. Worth reporting upstream.
+   exec is SIGKILL'd at startup (exit 137). A 1-second `sleep` before the
+   final attach usually avoids this, but not always — `run_sandbox` also
+   retries the attach once on exit 137 with a longer wait. Worth reporting
+   upstream.
 
 6. **`bash -x` leaks secrets:** The first version of `inject_credentials`
    stored the extracted Keychain token in a shell variable, which
@@ -132,6 +138,10 @@ Key sbx facts that govern the implementation:
   with "sandbox X already exists and can't be given new workspaces". The
   correct flow: `sbx create claude <primary> <mounts>` once, then
   `sbx exec` on every subsequent attach.
+- **Stopped vs. running:** `sbx exec` auto-starts a stopped sandbox before
+  running the command (per `sbx exec --help`). cdc relies on this — the
+  cdc-side post-exit `sbx stop` is for resource cleanup, and the next attach
+  re-starts the sandbox transparently. There is no `sbx start` subcommand.
 
 ## Code style
 
@@ -159,8 +169,8 @@ Key sbx facts that govern the implementation:
 ### What this script deliberately is not
 
 - It is **not a config manager**. Only mount paths are configurable; every
-  other parameter (Docker start timeout, sandbox name hash format, preflight
-  check list) is hardcoded. If something new needs to change, think twice
+  other parameter (sandbox name hash format, preflight check list) is
+  hardcoded. If something new needs to change, think twice
   before moving it to config.
 - It is **not a container orchestrator**. It forwards to `sbx` and lets
   sbx own sandbox lifecycle.
@@ -225,8 +235,9 @@ a PR:
 4. **Worktree sanity.** Run `cdc` from a `.worktrees/feat-foo` directory under
    another repo and confirm the primary mount is the worktree path, not the
    main checkout.
-5. **Failure spot checks.** Quit Docker Desktop mid-session, Ctrl-C during the
-   30 s Docker wait, run from a directory outside `~/workspace`.
+5. **Failure spot checks.** Run from a directory outside `~/workspace`; break
+   `sbx` (uninstall or deauthenticate) and confirm its error surfaces cleanly.
+   `cdc` itself does not probe for Docker — `sbx` owns its environment.
 
 Shell lint:
 

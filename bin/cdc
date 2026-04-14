@@ -18,10 +18,6 @@ preflight_sbx() {
 	command -v sbx >/dev/null 2>&1
 }
 
-preflight_docker() {
-	docker info >/dev/null 2>&1 && docker ps >/dev/null 2>&1
-}
-
 preflight_sbx_auth() {
 	sbx ls >/dev/null 2>&1
 }
@@ -55,9 +51,6 @@ cdc: sbx not found on PATH.
     Then run:  sbx login
 EOF
 		;;
-	docker)
-		echo "cdc: Docker Desktop is not responding. Run 'docker info' to debug." >&2
-		;;
 	sbx_auth)
 		echo "cdc: sbx is not authenticated. Run: sbx login" >&2
 		;;
@@ -71,34 +64,12 @@ EOF
 	exit 1
 }
 
-ensure_docker_running() {
-	if docker info >/dev/null 2>&1; then
-		return 0
-	fi
-	echo "cdc: Docker Desktop is not running. Starting it..." >&2
-	open -a Docker 2>/dev/null || die "failed to launch Docker Desktop."
-	local waited=0
-	while ((waited < 30)); do
-		if docker info >/dev/null 2>&1; then
-			echo >&2
-			return 0
-		fi
-		sleep 1
-		waited=$((waited + 1))
-		printf '.' >&2
-	done
-	echo >&2
-	die "Docker Desktop failed to start within 30s."
-}
-
 run_preflight() {
 	if [[ $CDC_NO_SANDBOX -eq 1 ]]; then
 		preflight_claude_binary || die_preflight claude_binary
 		return 0
 	fi
 	preflight_sbx || die_preflight sbx
-	ensure_docker_running
-	preflight_docker || die_preflight docker
 	preflight_sbx_auth || die_preflight sbx_auth
 	preflight_claude_dir || die_preflight claude_dir
 	return 0
@@ -115,7 +86,6 @@ print_check() {
 
 run_ls() {
 	preflight_sbx || die_preflight sbx
-	ensure_docker_running
 	preflight_sbx_auth || die_preflight sbx_auth
 	echo "# active sbx sandboxes"
 	sbx ls
@@ -123,7 +93,6 @@ run_ls() {
 
 run_rm() {
 	preflight_sbx || die_preflight sbx
-	ensure_docker_running
 	preflight_sbx_auth || die_preflight sbx_auth
 
 	local target
@@ -157,32 +126,6 @@ run_doctor() {
 		print_check OK "sbx installed"
 	else
 		print_check FAIL "sbx installed    (brew install docker/tap/sbx)"
-		fails=$((fails + 1))
-	fi
-
-	# Auto-start Docker if it's not running, same as the normal cdc exec path.
-	# Unlike ensure_docker_running (which calls die on failure), this inline
-	# version continues to the remaining checks so doctor always reports the
-	# full picture.
-	if ! docker info >/dev/null 2>&1; then
-		echo "  Docker Desktop is not running. Attempting to start it..." >&2
-		open -a Docker 2>/dev/null || true
-		local docker_waited=0
-		while ((docker_waited < 30)); do
-			if docker info >/dev/null 2>&1; then
-				break
-			fi
-			sleep 1
-			docker_waited=$((docker_waited + 1))
-			printf '.' >&2
-		done
-		[[ $docker_waited -gt 0 ]] && echo >&2
-	fi
-
-	if preflight_docker; then
-		print_check OK "Docker Desktop running"
-	else
-		print_check FAIL "Docker Desktop running    (could not start within 30s)"
 		fails=$((fails + 1))
 	fi
 
@@ -470,6 +413,35 @@ sandbox_exists() {
 	sbx ls 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$name"
 }
 
+CDC_SPINNER_PID=""
+
+spinner_start() {
+	# Animated single-line spinner on stderr so the user sees cdc making
+	# progress during the otherwise-silent inject+symlink+sleep phase between
+	# `sbx create` and the foreground `sbx exec` attach. No-op when stderr
+	# isn't a TTY (CI, piped output) — a spinner there is just noise.
+	[[ -t 2 ]] || return 0
+	local msg="$1"
+	(
+		local frames='-\|/'
+		local i=0
+		trap 'printf "\r\033[K" >&2; exit 0' TERM
+		while :; do
+			printf '\r%s %s' "${frames:i++%4:1}" "$msg" >&2
+			sleep 0.15
+		done
+	) &
+	CDC_SPINNER_PID=$!
+}
+
+spinner_stop() {
+	[[ -n "$CDC_SPINNER_PID" ]] || return 0
+	kill "$CDC_SPINNER_PID" 2>/dev/null || true
+	wait "$CDC_SPINNER_PID" 2>/dev/null || true
+	printf '\r\033[K' >&2
+	CDC_SPINNER_PID=""
+}
+
 inject_credentials() {
 	local name="$1"
 	# SECURITY: never assign the token to a shell variable — `bash -x` would
@@ -628,7 +600,9 @@ run_sandbox() {
 	local name
 	name="$(compute_sandbox_name)"
 
-	# Step 1: create sandbox if it doesn't exist yet
+	# Step 1: create the sandbox if it doesn't exist yet. If it exists but is
+	# stopped (cdc's own post-exit `sbx stop` leaves it that way), `sbx exec`
+	# below will auto-start it — that's documented in `sbx exec --help`.
 	if ! sandbox_exists "$name"; then
 		local create_argv=()
 		build_create_argv
@@ -638,6 +612,14 @@ run_sandbox() {
 			return 1
 		}
 	fi
+
+	# Tell the user cdc is still driving — `sbx create` ends by printing
+	# "To connect to this sandbox, run: sbx run <name>", which looks like an
+	# instruction but isn't (cdc is about to attach automatically). The
+	# spinner runs through the silent prep phase so a slow inject doesn't
+	# look like a freeze; it's stopped before the foreground sbx exec so it
+	# doesn't fight sbx's own output.
+	spinner_start "connecting claude to sandbox $name"
 
 	# Step 2: inject credentials (idempotent, refreshes token each run)
 	inject_credentials "$name"
@@ -650,12 +632,13 @@ run_sandbox() {
 
 	# sbx race workaround: rapid successive sbx calls leave the sbx daemon in
 	# a state where the next interactive exec is SIGKILL'd at startup (exit 137).
-	# A brief pause before the attach lets the daemon settle.
+	# A brief pause before the attach lets the daemon settle; on the rare
+	# occasion the pause isn't enough, retry once with a longer wait.
 	sleep 1
+	spinner_stop
 
 	# Step 4: run claude in the foreground. We use a foreground call (not exec)
-	# so we can run cleanup (sbx stop) after claude exits. The sleep above
-	# handles the 137 race that originally motivated the exec.
+	# so we can run cleanup (sbx stop) after claude exits.
 	local rc=0
 
 	# Register cleanup trap so sandbox stops even on Ctrl-C / SIGTERM
@@ -663,7 +646,19 @@ run_sandbox() {
 		trap 'sbx stop "$name" >/dev/null 2>&1 || true; exit 130' INT TERM
 	fi
 
-	"${CDC_SBX_ARGV[@]}" || rc=$?
+	local attempt
+	for attempt in 1 2; do
+		rc=0
+		"${CDC_SBX_ARGV[@]}" || rc=$?
+		# 137 on the very first exec is the documented sbx rapid-call race.
+		# Anything else (including a 137 from the user killing claude later)
+		# is a real exit and should propagate.
+		if [[ $rc -ne 137 || $attempt -eq 2 ]]; then
+			break
+		fi
+		echo "cdc: sbx exec exited 137 (daemon race); retrying after short wait..." >&2
+		sleep 3
+	done
 
 	# Clean up trap
 	trap - INT TERM
