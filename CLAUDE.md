@@ -159,8 +159,8 @@ Key sbx facts that govern the implementation:
 ### What this script deliberately is not
 
 - It is **not a config manager**. Only mount paths are configurable; every
-  other parameter (Docker start timeout, sandbox name hash format, preflight
-  check list) is hardcoded. If something new needs to change, think twice
+  other parameter (sandbox name hash format, preflight check list) is
+  hardcoded. If something new needs to change, think twice
   before moving it to config.
 - It is **not a container orchestrator**. It forwards to `sbx` and lets
   sbx own sandbox lifecycle.
@@ -225,13 +225,9 @@ a PR:
 4. **Worktree sanity.** Run `cdc` from a `.worktrees/feat-foo` directory under
    another repo and confirm the primary mount is the worktree path, not the
    main checkout.
-5. **Failure spot checks.** Exercise both Docker Desktop presence cases:
-   (a) Docker Desktop present + running → quit mid-session, Ctrl-C during the
-   30 s Docker wait, confirm `cdc` surfaces the failure via `sbx` output;
-   (b) Docker Desktop absent entirely (rename `/Applications/Docker.app` or
-   test on a machine without it) → confirm `cdc` proceeds to `sbx` without
-   a Docker-related hard-fail and `--cdc-doctor` shows an `INFO` row.
-   Also: run from a directory outside `~/workspace`.
+5. **Failure spot checks.** Run from a directory outside `~/workspace`; break
+   `sbx` (uninstall or deauthenticate) and confirm its error surfaces cleanly.
+   `cdc` itself does not probe for Docker — `sbx` owns its environment.
 
 Shell lint:
 

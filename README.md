@@ -186,11 +186,7 @@ Plugins and skills remain shared read-only; MCP servers are the gap.
 
 ## Quick Install
 
-- `brew install --cask docker` (launch Docker Desktop once so the daemon is running)
 - `brew install docker/tap/sbx && sbx login`
-
-> Docker Desktop is **optional**. `sbx` runs standalone via microVMs on macOS (Apple silicon), Windows 11, and Linux (user must be in the `kvm` group). `cdc` will auto-start Docker Desktop only if it is installed, and will otherwise defer to `sbx`'s own environment checks.
-
 - Install Claude Code: run `claude` and use `/login` (or follow https://claude.ai/claude-code)
 - Install `cdc`: `curl -fsSL https://raw.githubusercontent.com/patclarke/claude-docker-container/main/install.sh | bash`
 
@@ -212,7 +208,7 @@ caffeinate -dims cdc --remote-control --chrome -c
 macOS only for now. Linux may work; I haven't tested it yet. Windows is
 unexplored.
 
-Setup has five steps. First time through takes about 10-15 minutes,
+Setup has four steps. First time through takes about 10 minutes,
 mostly waiting for downloads. After each step there's a one-line command
 you can run to confirm it worked.
 
@@ -222,8 +218,7 @@ You'll need:
 - A Claude account -- sign up at [claude.ai](https://claude.ai) if you
   don't have one (the free tier is enough to get started; `cdc` works with
   any Claude Code tier)
-- About 10 GB of free disk space (most of it is Docker Desktop and the
-  sandbox image)
+- A few GB of free disk space (mostly the sbx sandbox image)
 
 ### Step 1: install Homebrew (if you don't have it yet)
 
@@ -248,35 +243,7 @@ When it finishes, follow its on-screen instructions to add Homebrew to
 your shell. Then open a new terminal window and run `brew --version`
 again to confirm.
 
-### Step 2: install Docker Desktop
-
-Docker Desktop provides the virtualization layer that sandboxes run
-inside. You need it installed and *running* before `cdc` can do anything.
-
-```bash
-brew install --cask docker
-```
-
-Alternative (if you prefer downloading the installer):
-[docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/)
-
-After the install finishes, **open Docker Desktop** (from your
-Applications folder or Spotlight). The first launch will ask you to agree
-to its terms, and then you'll see a whale icon appear in your Mac's menu
-bar. Wait for the whale to stop animating -- that means the Docker daemon
-is ready. This usually takes 15-30 seconds.
-
-**Verify:**
-
-```bash
-docker info >/dev/null 2>&1 && echo "OK Docker is running" || echo "FAIL Docker NOT running -- open Docker Desktop from Applications"
-```
-
-If you see `FAIL`, open Docker Desktop and wait for the menu-bar whale to
-settle, then try again. You can quit Docker Desktop anytime you're not
-using `cdc`; `cdc` will auto-start it on the next run if needed.
-
-### Step 3: install Claude Code and log in
+### Step 2: install Claude Code and log in
 
 [Claude Code](https://claude.com/claude-code) is Anthropic's official
 command-line interface for Claude. `cdc` runs it inside the sandbox, but
@@ -319,7 +286,7 @@ You should see output like:
 If `loggedIn` is `false`, run `claude` again and try `/login` inside the
 session.
 
-### Step 4: install sbx (Docker Sandboxes)
+### Step 3: install sbx (Docker Sandboxes)
 
 `sbx` is the command-line tool that creates and manages sandboxes. It's
 maintained by Docker.
@@ -344,7 +311,7 @@ sbx ls
 You should see a "No sandboxes found" message (that's the success case --
 you don't have any sandboxes yet).
 
-### Step 5: install `cdc`
+### Step 4: install `cdc`
 
 `cdc` itself is a single bash script. The easiest way to install it is
 with the one-liner installer, which downloads `cdc` to `~/bin`, detects
@@ -357,7 +324,7 @@ curl -fsSL https://raw.githubusercontent.com/patclarke/claude-docker-container/m
 The installer also runs `cdc --cdc-doctor` at the end as a health check.
 
 **After the install finishes, open a new terminal** so the PATH change
-takes effect, then skip to Step 6.
+takes effect, then skip to Step 5.
 
 <details>
 <summary>Prefer to install manually?</summary>
@@ -389,7 +356,7 @@ Should print: `/Users/<your-username>/bin/cdc`
 
 </details>
 
-### Step 6: final health check
+### Step 5: final health check
 
 If you used the one-liner installer above, the doctor already ran. In a
 **new terminal** (so PATH is updated), verify everything:
@@ -398,13 +365,12 @@ If you used the one-liner installer above, the doctor already ran. In a
 cdc --cdc-doctor
 ```
 
-You should see five green `OK` lines:
+You should see four green `OK` lines:
 
 ```
 cdc doctor
 
   OK    sbx installed
-  OK    Docker Desktop running
   OK    sbx authenticated
   OK    /Users/you/.claude is writable
   OK    claude installed on host (escape hatch available)
@@ -417,12 +383,6 @@ Mount plan (from /Users/you/.config/cdc/mounts.conf):
 
 All checks passed.
 ```
-
-If Docker Desktop isn't running when you run `cdc --cdc-doctor`, it will
-attempt to start it automatically (same as a normal `cdc` invocation) and
-wait up to 30 seconds. If Docker comes up, the check reports OK. If not,
-it reports FAIL and continues with the remaining checks so you still see
-the full picture.
 
 If anything is `FAIL`, the doctor prints exactly which step you need to
 revisit. The first time you run `cdc --cdc-doctor`, it creates
@@ -442,14 +402,6 @@ something.
 
 **`brew: command not found`** -- you skipped Step 1. Install Homebrew,
 then open a new terminal.
-
-**`docker: command not found` after installing Docker Desktop** --
-Docker Desktop's CLI tools aren't on PATH yet. Close and reopen your
-terminal, then try `docker info` again.
-
-**Docker Desktop won't start** -- quit it (right-click the whale icon ->
-Quit), open Activity Monitor, force-quit any `Docker` or `com.docker.*`
-processes, and relaunch Docker Desktop from Applications.
 
 **`sbx login` opens a browser but I don't have a Docker Hub account** --
 you can create one for free at
@@ -586,8 +538,8 @@ to your session history and plugins.
 
 On every invocation, `cdc` does this:
 
-1. **Preflight.** Check that `sbx` is installed, Docker Desktop is running
-   (auto-start if not), `sbx` is authenticated, and `~/.claude` is writable.
+1. **Preflight.** Check that `sbx` is installed, `sbx` is authenticated, and
+   `~/.claude` is writable. `sbx` surfaces any environment issues of its own.
 2. **Plan.** Load mounts from `~/.config/cdc/mounts.conf`, apply `--cdc-mount`
    and `--cdc-no-mount` overrides, drop any mount whose path is missing, and
    strip any mount that's an ancestor of your current working directory
@@ -821,8 +773,7 @@ Linux: probably, with tweaks. The Keychain extraction step is macOS-specific
 file at `~/.claude/.credentials.json`; `cdc` would need a code path that
 reads that file instead of calling `security`. PRs welcome.
 
-Windows: untested and unplanned. Would require Docker Desktop for Windows
-and a different credential flow.
+Windows: untested and unplanned. Would require a different credential flow.
 
 **Can I use this with non-Claude agents (Codex, Gemini, etc.)?**
 

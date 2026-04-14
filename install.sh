@@ -3,7 +3,6 @@
 # cdc installer — downloads bin/cdc and sets up PATH.
 #
 # Prerequisites (not handled by this script):
-#   - Docker Desktop:  brew install --cask docker
 #   - Claude Code:     https://claude.com/claude-code
 #   - sbx:             brew install docker/tap/sbx && sbx login
 #
@@ -130,7 +129,6 @@ echo ""
 echo "  Or just open a new terminal — PATH will be set automatically."
 echo ""
 echo "Prerequisites not handled by this script:"
-echo "  - Docker Desktop:  brew install --cask docker"
 echo "  - Claude Code:     https://claude.com/claude-code"
 echo "  - sbx:             brew install docker/tap/sbx && sbx login"
 echo ""
