@@ -188,6 +188,9 @@ Plugins and skills remain shared read-only; MCP servers are the gap.
 
 - `brew install --cask docker` (launch Docker Desktop once so the daemon is running)
 - `brew install docker/tap/sbx && sbx login`
+
+> Docker Desktop is **optional**. `sbx` runs standalone via microVMs on macOS (Apple silicon), Windows 11, and Linux (user must be in the `kvm` group). `cdc` will auto-start Docker Desktop only if it is installed, and will otherwise defer to `sbx`'s own environment checks.
+
 - Install Claude Code: run `claude` and use `/login` (or follow https://claude.ai/claude-code)
 - Install `cdc`: `curl -fsSL https://raw.githubusercontent.com/patclarke/claude-docker-container/main/install.sh | bash`
 
