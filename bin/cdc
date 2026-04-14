@@ -413,6 +413,30 @@ sandbox_exists() {
 	sbx ls 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$name"
 }
 
+sandbox_status() {
+	# Prints the STATUS column for a sandbox (running | stopped | ""), stripping
+	# ANSI color codes sbx emits (e.g. "\033[32mrunning\033[0m"). Empty output
+	# means the sandbox does not exist.
+	local name="$1"
+	sbx ls 2>/dev/null |
+		awk -v n="$name" 'NR>1 && $1 == n {print $3}' |
+		sed -E 's/\x1b\[[0-9;]*m//g'
+}
+
+ensure_sandbox_running() {
+	# `sbx exec` on a stopped sandbox fails. If the sandbox exists but is
+	# stopped (e.g. cdc's own post-exit `sbx stop` from the previous run), bring
+	# it back up before injecting credentials and attaching.
+	local name="$1"
+	if [[ "$(sandbox_status "$name")" != "stopped" ]]; then
+		return 0
+	fi
+	sbx start "$name" >/dev/null 2>&1 || {
+		echo "cdc: failed to start existing sandbox $name" >&2
+		return 1
+	}
+}
+
 inject_credentials() {
 	local name="$1"
 	# SECURITY: never assign the token to a shell variable — `bash -x` would
@@ -571,7 +595,8 @@ run_sandbox() {
 	local name
 	name="$(compute_sandbox_name)"
 
-	# Step 1: create sandbox if it doesn't exist yet
+	# Step 1: ensure the sandbox exists and is running. Create it if new; start
+	# it if a previous cdc run (or manual `sbx stop`) left it stopped.
 	if ! sandbox_exists "$name"; then
 		local create_argv=()
 		build_create_argv
@@ -580,6 +605,8 @@ run_sandbox() {
 			echo "cdc: failed to create sandbox $name" >&2
 			return 1
 		}
+	else
+		ensure_sandbox_running "$name" || return 1
 	fi
 
 	# Step 2: inject credentials (idempotent, refreshes token each run)
@@ -593,12 +620,12 @@ run_sandbox() {
 
 	# sbx race workaround: rapid successive sbx calls leave the sbx daemon in
 	# a state where the next interactive exec is SIGKILL'd at startup (exit 137).
-	# A brief pause before the attach lets the daemon settle.
+	# A brief pause before the attach lets the daemon settle; on the rare
+	# occasion the pause isn't enough, retry once with a longer wait.
 	sleep 1
 
 	# Step 4: run claude in the foreground. We use a foreground call (not exec)
-	# so we can run cleanup (sbx stop) after claude exits. The sleep above
-	# handles the 137 race that originally motivated the exec.
+	# so we can run cleanup (sbx stop) after claude exits.
 	local rc=0
 
 	# Register cleanup trap so sandbox stops even on Ctrl-C / SIGTERM
@@ -606,7 +633,19 @@ run_sandbox() {
 		trap 'sbx stop "$name" >/dev/null 2>&1 || true; exit 130' INT TERM
 	fi
 
-	"${CDC_SBX_ARGV[@]}" || rc=$?
+	local attempt
+	for attempt in 1 2; do
+		rc=0
+		"${CDC_SBX_ARGV[@]}" || rc=$?
+		# 137 on the very first exec is the documented sbx rapid-call race.
+		# Anything else (including a 137 from the user killing claude later)
+		# is a real exit and should propagate.
+		if [[ $rc -ne 137 || $attempt -eq 2 ]]; then
+			break
+		fi
+		echo "cdc: sbx exec exited 137 (daemon race); retrying after short wait..." >&2
+		sleep 3
+	done
 
 	# Clean up trap
 	trap - INT TERM

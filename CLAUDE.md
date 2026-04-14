@@ -49,12 +49,16 @@ execution.
    removals. Strip ancestor mounts. Compute a deterministic sandbox name from
    cwd. Build the final `sbx` argv.
 3. **Exec.** If the named sandbox doesn't exist, create it with
-   `sbx create claude <primary> <mounts>`. Then inject credentials via
-   `sbx exec -i`. Then create sharing symlinks via `sbx exec`. Finally attach
-   with `sbx exec -it <name> env ... claude <claude-args>` in the foreground
+   `sbx create claude <primary> <mounts>`. If it exists but is stopped (cdc's
+   own post-exit `sbx stop` leaves it that way), bring it back up with
+   `sbx start`. Then inject credentials via `sbx exec -i`. Then create
+   sharing symlinks via `sbx exec`. Finally attach with
+   `sbx exec -it <name> env ... claude <claude-args>` in the foreground
    (not via `exec` — we need to return to cdc after claude exits for cleanup).
-   After claude exits, `cdc` runs `sbx stop` to free the microVM's resources.
-   Pass `--cdc-keep-running` to skip the stop. Propagate sbx's exit code.
+   If that first attach exits 137 (sbx rapid-call race — see lesson 5), retry
+   once after a longer wait. After claude exits, `cdc` runs `sbx stop` to
+   free the microVM's resources. Pass `--cdc-keep-running` to skip the stop.
+   Propagate sbx's exit code.
 
 The `--cdc-dry-run`, `--cdc-doctor`, and `--cdc-no-sandbox` flags short-circuit
 the exec phase in different ways; they still run parse and the relevant parts
@@ -100,8 +104,10 @@ Additional runtime surprises found during implementation:
 5. **sbx rapid-call race:** Running several sbx subcommands back-to-back
    (`create`, `exec` for inject, `exec` for symlinks, final `exec` to
    attach) leaves the sbx daemon in a state where the next interactive
-   exec is SIGKILL'd at startup. A 1-second `sleep` before the final
-   attach avoids this. Worth reporting upstream.
+   exec is SIGKILL'd at startup (exit 137). A 1-second `sleep` before the
+   final attach usually avoids this, but not always — `run_sandbox` also
+   retries the attach once on exit 137 with a longer wait. Worth reporting
+   upstream.
 
 6. **`bash -x` leaks secrets:** The first version of `inject_credentials`
    stored the extracted Keychain token in a shell variable, which
@@ -132,6 +138,9 @@ Key sbx facts that govern the implementation:
   with "sandbox X already exists and can't be given new workspaces". The
   correct flow: `sbx create claude <primary> <mounts>` once, then
   `sbx exec` on every subsequent attach.
+- **Stopped vs. running:** `sbx exec` fails on a stopped sandbox. Since cdc
+  auto-stops after claude exits, every subsequent attach must first check
+  status via `sbx ls` and call `sbx start` if needed.
 
 ## Code style
 
