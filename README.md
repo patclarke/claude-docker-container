@@ -622,6 +622,39 @@ user-level `~/.claude/CLAUDE.md` is not shared. Project-level `CLAUDE.md` in
 | `~/.aws`                | RO   | Credentials readable by agent; **see credential scoping above** |
 | `~/.ssh`                | RO   | git over ssh; **see credential scoping above**                  |
 
+### AWS credential handling
+
+Unlike the GitHub case, the sbx `aws` secret alone doesn't cover every
+AWS workflow. Which credential path you use decides whether `~/.aws:ro`
+needs to stay mounted.
+
+| Access pattern     | Works with `sbx secret set -g aws` alone? | Why                                                                    |
+|--------------------|-------------------------------------------|------------------------------------------------------------------------|
+| Static access keys | Yes                                       | No client-side logic: the proxy injects the `Authorization` header     |
+| Named profiles     | No                                        | CLI reads `~/.aws/config` to resolve the profile before any HTTP call  |
+| Assume-role        | No                                        | CLI reads `role_arn` from `~/.aws/config` and caches STS output on disk|
+| AWS SSO            | No                                        | `aws sso login` needs a browser and writes token cache to `~/.aws/sso/`|
+
+**Default (all patterns):** keep `~/.aws:ro` mounted — this is the
+default, no action needed. Trade-off: a runaway agent can read the raw
+credential file.
+
+**Static-keys-only, tighter scoping:** on the host, run
+
+    sbx secret set -g aws
+
+Paste your access key and secret when prompted (or pipe from stdin per
+`sbx secret set --help`). Then launch cdc with the mount suppressed:
+
+    cdc --cdc-no-mount ~/.aws
+
+Raw credentials never cross the VM boundary; the proxy injects auth on
+outbound AWS API calls.
+
+**SSO users:** keep `~/.aws:ro` mounted. `aws sso login` opens a
+browser and writes a token cache to `~/.aws/sso/`, neither of which
+the proxy handles.
+
 ### Customizing
 
 Permanent changes: edit `~/.config/cdc/mounts.conf`. One line per mount,
