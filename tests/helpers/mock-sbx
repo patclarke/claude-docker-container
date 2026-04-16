@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Mock `sbx` for integration tests. Records every invocation to CDC_TEST_LOG
+# and returns the exit code from CDC_TEST_MOCK_SBX_EXIT (default 0).
+set -uo pipefail
+
+: "${CDC_TEST_LOG:=/tmp/cdc-test-log}"
+: "${CDC_TEST_MOCK_SBX_EXIT:=0}"
+
+{
+	printf 'sbx'
+	for arg in "$@"; do
+		printf ' %q' "$arg"
+	done
+	printf '\n'
+} >>"$CDC_TEST_LOG"
+
+case "${1:-}" in
+	ls) echo "" ;;
+	exec) ;;
+esac
+
+exit "$CDC_TEST_MOCK_SBX_EXIT"
