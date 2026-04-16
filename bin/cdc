@@ -480,6 +480,18 @@ inject_credentials() {
 	return 0
 }
 
+extract_oauth_url() {
+	# Read stdin, emit the first Anthropic OAuth-authorize URL found. Exit
+	# non-zero if none seen. The URL prefix is deliberately tight
+	# (https://claude.com/cai/oauth/authorize) so we don't mis-match unrelated
+	# links. ANSI escapes around the surrounding text are tolerated because
+	# grep -o extracts only the matched URL, not the whole line.
+	sed 's/\x1b\[[0-9;]*m//g' |
+		grep -o -m1 'https://claude\.com/cai/oauth/authorize[^[:space:]]*' |
+		head -n1 |
+		grep .
+}
+
 sandbox_cred_file_exists() {
 	# Returns 0 iff /home/agent/.claude/.credentials.json exists and is non-empty
 	# inside the named sandbox. run_sandbox uses this to decide whether to run
