@@ -217,8 +217,18 @@ Conventional format:
 
 ## Testing
 
-There is **no automated test suite.** This is a bash wrapper around a CLI on
-a specific developer machine; the validation model is a manual checklist.
+Tests live in `tests/` and run via `bats tests/`. When changing
+`bin/cdc`:
+
+1. **Pure helpers** (e.g. `extract_oauth_url`, `compute_sandbox_name`):
+   add unit tests in `tests/unit-*.bats` with fixtures in
+   `tests/fixtures/`.
+2. **Orchestration branches** (e.g. `run_sandbox`, `run_login_flow`):
+   add integration tests in `tests/integration-*.bats` using the mock
+   `sbx` and `open` helpers in `tests/helpers/`.
+3. **End-to-end flows with real OAuth** (first-run login, browser
+   handoff): still a manual scenario — the bats layer does not exercise
+   a live Anthropic login. Walk the checklist below before opening a PR.
 
 When changing `bin/cdc`, walk through the full validation matrix before opening
 a PR:
@@ -256,9 +266,6 @@ This repo intentionally does one thing. **Do not** add:
   wrapper around another CLI.
 - Cross-host state sync, a daemon, a plugin system, or a TUI. They belong in
   a different project.
-- Automated test harnesses. Manual validation is adequate for a wrapper
-  script and the overhead of setting up test infrastructure around `sbx`
-  would dwarf the script itself.
 
 If a change you're considering doesn't fit in a `feat:` or `fix:` commit
 against `bin/cdc`, `README.md`, `CLAUDE.md`, or `.gitignore`, it probably
