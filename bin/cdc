@@ -820,4 +820,8 @@ main() {
 	return $?
 }
 
-main "$@"
+# Only run main when executed directly; allow `source bin/cdc` from tests to
+# load function definitions without triggering the CLI dispatch.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	main "$@"
+fi
