@@ -520,15 +520,14 @@ extract_oauth_url() {
 		grep .
 }
 
-sandbox_cred_file_exists() {
-	# Returns 0 iff /home/agent/.claude/.credentials.json exists and is non-empty
-	# inside the named sandbox. run_sandbox uses this to decide whether to run
-	# the login flow on attach. Stdin redirect from /dev/null mirrors
-	# setup_share_symlinks — sbx exec otherwise steals cdc's stdin and breaks
-	# the subsequent foreground attach.
+sandbox_has_subscription_auth() {
+	# Check whether the sandbox has a real Claude subscription login (Max,
+	# Team, Enterprise) vs just the proxy-managed API stubs that sbx
+	# pre-populates. Proxy stubs give "Sonnet · Claude API"; a real /login
+	# gives the user's subscription tier.
 	local name="$1"
-	sbx exec "$name" test -s /home/agent/.claude/.credentials.json \
-		</dev/null >/dev/null 2>&1
+	sbx exec "$name" claude auth status --json </dev/null 2>/dev/null |
+		grep -q '"subscriptionType":[[:space:]]*"[^"]'
 }
 
 setup_share_symlinks() {
@@ -686,11 +685,11 @@ run_sandbox() {
 		}
 	fi
 
-	# Step 2: first-run Claude Code login. When the sandbox has no credentials
-	# file yet (fresh sandbox, or after `cdc --cdc-rm`), run `claude auth login`
-	# inside the sandbox and open the Mac browser on the OAuth URL. The login
-	# flow is interactive so it runs before the spinner.
-	if ! sandbox_cred_file_exists "$name"; then
+	# Step 2: first-run Claude Code login. When the sandbox has no real
+	# subscription auth (fresh sandbox, or after `cdc --cdc-rm`), run
+	# `claude auth login` inside the sandbox and open the Mac browser on the
+	# OAuth URL. The login flow is interactive so it runs before the spinner.
+	if ! sandbox_has_subscription_auth "$name"; then
 		run_login_flow "$name" || {
 			echo "cdc: login flow failed; not attaching" >&2
 			return 1

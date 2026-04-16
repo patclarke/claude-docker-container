@@ -8,9 +8,9 @@ setup() {
 teardown() { cdc_teardown; }
 
 # Build a mock sbx that handles all subcommands run_sandbox needs.
-# $1 — exit code for `test -s` (0 = creds exist, 1 = missing)
+# $1 — auth JSON to return for `claude auth status` calls
 _write_mock_sbx() {
-	local cred_check_exit="$1"
+	local auth_json="$1"
 	cat >"$CDC_TEST_DIR/bin/sbx" <<S
 #!/usr/bin/env bash
 : "\${CDC_TEST_LOG:=/tmp/cdc-test-log}"
@@ -18,7 +18,10 @@ _write_mock_sbx() {
 case "\$1" in
 	ls) echo "my-sandbox" ;;
 	exec)
-		if printf '%s ' "\$@" | grep -q 'test -s'; then exit $cred_check_exit; fi
+		if printf '%s ' "\$@" | grep -q 'claude auth status'; then
+			echo '$auth_json'
+			exit 0
+		fi
 		if printf '%s ' "\$@" | grep -q 'claude auth login'; then
 			echo "Visit: https://claude.com/cai/oauth/authorize?x=1"
 			sleep 0.1
@@ -34,8 +37,8 @@ S
 }
 
 @test "no-creds branch runs login flow before attach" {
-	_write_mock_sbx 1  # cred file missing → run login flow
-	export -f extract_oauth_url run_login_flow sandbox_cred_file_exists
+	_write_mock_sbx '{"loggedIn":true,"subscriptionType":null}'
+	export -f extract_oauth_url run_login_flow sandbox_has_subscription_auth
 
 	CDC_RESOLVED_MOUNTS=()
 	CDC_KEEP_RUNNING=1
@@ -49,8 +52,8 @@ S
 }
 
 @test "creds-exist branch skips login flow" {
-	_write_mock_sbx 0  # cred file present → skip login flow
-	export -f extract_oauth_url run_login_flow sandbox_cred_file_exists
+	_write_mock_sbx '{"loggedIn":true,"subscriptionType":"max"}'
+	export -f extract_oauth_url run_login_flow sandbox_has_subscription_auth
 
 	CDC_RESOLVED_MOUNTS=()
 	CDC_KEEP_RUNNING=1
