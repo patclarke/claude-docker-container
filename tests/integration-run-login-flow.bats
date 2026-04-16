@@ -59,30 +59,3 @@ teardown() { cdc_teardown; }
 	[ "$status" -eq 0 ]
 	! grep -q '^open ' "$CDC_TEST_LOG"
 }
-
-@test "run_login_flow retries once on exit 137 and succeeds on second attempt" {
-	# Stateful mock: first call to claude auth login returns 137 (daemon race),
-	# second call returns 0. Uses a counter file to track invocations.
-	local counter_file="$CDC_TEST_DIR/login-call-count"
-	echo 0 >"$counter_file"
-	cat >"$CDC_TEST_DIR/bin/sbx" <<MOCK
-#!/usr/bin/env bash
-: "\${CDC_TEST_LOG:=/tmp/cdc-test-log}"
-{ printf 'sbx'; for a in "\$@"; do printf ' %q' "\$a"; done; printf '\n'; } >>"\$CDC_TEST_LOG"
-if printf '%s ' "\$@" | grep -q 'claude auth login'; then
-	count=\$(cat "$counter_file")
-	count=\$((count + 1))
-	echo "\$count" >"$counter_file"
-	if [[ \$count -eq 1 ]]; then
-		exit 137
-	fi
-fi
-exit 0
-MOCK
-	chmod +x "$CDC_TEST_DIR/bin/sbx"
-
-	run run_login_flow my-sandbox
-	[ "$status" -eq 0 ]
-	# Both attempts should be logged
-	[ "$(grep -c 'claude auth login' "$CDC_TEST_LOG")" -eq 2 ]
-}

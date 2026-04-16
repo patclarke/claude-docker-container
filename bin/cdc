@@ -467,52 +467,43 @@ spinner_stop() {
 run_login_flow() {
 	# Run `claude auth login` inside the sandbox. Tail its stdout; when we
 	# spot the OAuth URL, open the user's Mac browser on it. Child output
-	# still reaches the user's terminal (we `tee` it), so any paste-back
-	# prompt claude emits is visible and interactive.
+	# still reaches the user's terminal (we `tee` it), so claude's
+	# paste-back prompt is visible and the TTY accepts the user's paste.
 	#
 	# Returns the child's exit code. Zero = creds written to
 	# /home/agent/.claude/.credentials.json inside the sandbox. Non-zero =
 	# user cancelled, network failure, etc. — caller aborts.
 	#
-	# On a fresh sandbox the sbx daemon may still be settling; retry once on
-	# exit 137 (rapid-call race, Lesson 5). Each attempt gets its own FIFO so
-	# the background reader doesn't block on a stale pipe from a prior attempt.
+	# No retry here. wait_for_sandbox_ready (called earlier in run_sandbox)
+	# prevents the sbx rapid-call race that used to SIGKILL this exec. A
+	# retry would print a second OAuth URL with a different state, and the
+	# user's first-tab code wouldn't match the second-tab process.
 	local name="$1"
-	local rc=0 attempt
 
-	for attempt in 1 2; do
-		rc=0
-		local fifo="${TMPDIR:-/tmp}/cdc-login-$$-${attempt}.fifo"
-		mkfifo "$fifo"
+	local fifo="${TMPDIR:-/tmp}/cdc-login-$$.fifo"
+	mkfifo "$fifo"
 
-		# Background reader: print lines to the terminal AND watch for the URL.
-		(
-			local url_opened=0
-			while IFS= read -r line || [[ -n "$line" ]]; do
-				printf '%s\n' "$line"
-				if [[ $url_opened -eq 0 ]]; then
-					local url
-					url="$(printf '%s\n' "$line" | extract_oauth_url)" || url=""
-					if [[ -n "$url" ]]; then
-						open "$url" >/dev/null 2>&1 || true
-						url_opened=1
-					fi
+	(
+		local url_opened=0
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			printf '%s\n' "$line"
+			if [[ $url_opened -eq 0 ]]; then
+				local url
+				url="$(printf '%s\n' "$line" | extract_oauth_url)" || url=""
+				if [[ -n "$url" ]]; then
+					open "$url" >/dev/null 2>&1 || true
+					url_opened=1
 				fi
-			done <"$fifo"
-		) &
-		local reader_pid=$!
+			fi
+		done <"$fifo"
+	) &
+	local reader_pid=$!
 
-		sbx exec -it "$name" claude auth login >"$fifo" || rc=$?
+	local rc=0
+	sbx exec -it "$name" claude auth login >"$fifo" || rc=$?
 
-		wait "$reader_pid" 2>/dev/null || true
-		rm -f "$fifo"
-
-		if [[ $rc -ne 137 || $attempt -eq 2 ]]; then
-			break
-		fi
-		echo "cdc: login exec hit daemon race (exit 137); retrying after longer wait..." >&2
-		sleep 3
-	done
+	wait "$reader_pid" 2>/dev/null || true
+	rm -f "$fifo"
 
 	if [[ $rc -ne 0 ]]; then
 		echo "cdc: login did not complete (exit $rc). Re-run cdc to try again." >&2
@@ -530,6 +521,26 @@ extract_oauth_url() {
 		grep -o -m1 'https://claude\.com/cai/oauth/authorize[^[:space:]]*' |
 		head -n1 |
 		grep .
+}
+
+wait_for_sandbox_ready() {
+	# After `sbx create`, the sbx daemon takes a moment before exec calls
+	# stop SIGKILL'ing (see CLAUDE.md Lesson 5). Poll a cheap exec until
+	# it returns non-137. Bail after max attempts to avoid hanging.
+	local name="$1"
+	local max="${CDC_READY_POLL_MAX:-30}"
+	local interval="${CDC_READY_POLL_INTERVAL:-0.5}"
+	local attempt rc
+	for attempt in $(seq 1 "$max"); do
+		rc=0
+		sbx exec "$name" true </dev/null >/dev/null 2>&1 || rc=$?
+		if [[ $rc -ne 137 ]]; then
+			return 0
+		fi
+		sleep "$interval"
+	done
+	echo "cdc: sandbox $name did not become ready after $((max / 2))s (sbx daemon race)" >&2
+	return 1
 }
 
 sandbox_has_subscription_auth() {
@@ -699,11 +710,11 @@ run_sandbox() {
 		created_sandbox=1
 	fi
 
-	# If we just created the sandbox, wait for the sbx daemon to settle before
-	# any `sbx exec` — otherwise the rapid-call race (Lesson 5) will SIGKILL
-	# the very next exec with exit 137.
+	# If we just created the sandbox, wait until the sbx daemon stops
+	# SIGKILL'ing exec calls (Lesson 5) before proceeding. Bail if it
+	# never recovers — better than looping forever.
 	if [[ $created_sandbox -eq 1 ]]; then
-		sleep 1
+		wait_for_sandbox_ready "$name" || return 1
 	fi
 
 	# Step 2: first-run Claude Code login. When the sandbox has no real
