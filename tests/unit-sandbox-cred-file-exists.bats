@@ -11,7 +11,14 @@ teardown() { cdc_teardown; }
 }
 
 @test "returns non-zero when sbx exec test -s fails" {
-	export CDC_TEST_MOCK_SBX_EXIT=1
+	# Override mock-sbx with one that exits 1 for exec, to simulate missing creds.
+	cat >"$CDC_TEST_DIR/bin/sbx" <<'S'
+#!/usr/bin/env bash
+: "${CDC_TEST_LOG:=/tmp/cdc-test-log}"
+{ printf 'sbx'; for a in "$@"; do printf ' %q' "$a"; done; printf '\n'; } >>"$CDC_TEST_LOG"
+exit 1
+S
+	chmod +x "$CDC_TEST_DIR/bin/sbx"
 	run sandbox_cred_file_exists my-sandbox
 	[ "$status" -ne 0 ]
 }
