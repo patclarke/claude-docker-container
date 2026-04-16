@@ -33,14 +33,14 @@ Run Claude Code in dangerous mode safely inside a fast, easy-to-use microVM that
 | Uses your host setup | Rebuild tooling/config per project               | Fresh VM; copy configs manually         | Reuses host Claude install, plugins, skills |
 | Isolation strength   | Container                                        | MicroVM                                 | MicroVM (same as sbx) |
 | Mount control        | `devcontainer.json` mounts                        | `sbx mount ...` flags                   | Smart mounts: project RW; plugins/skills RO |
-| Credential handling  | Whatever you bind in                             | Manual; read-write by default           | Injects Claude token; `~/.aws`, `~/.ssh` RO; sbx `github` secret for git |
+| Credential handling  | Whatever you bind in                             | Manual; read-write by default           | First-run browser login; `~/.aws`, `~/.ssh` RO; sbx `github` secret for git |
 | Claude workflow      | Use `claude` inside container                    | `sbx run ...` inside VM                 | Keep typing `claude ...`; prefix with `cdc` |
 | Performance          | Cold start slow, steady OK                       | Cold start seconds                      | Cold start seconds; interactive feels host-like |
 | Retain context       | Per-container unless you mount it                | Per-sandbox; resets if you recreate it  | Yes; shares `~/.claude/projects` with host |
 
 ## Safety at a glance
 
-- **Read-only mounts:** `~/.claude/plugins`, `~/.claude/skills`, `~/.aws`, `~/.ssh`, injected Claude OAuth token.
+- **Read-only mounts:** `~/.claude/plugins`, `~/.claude/skills`, `~/.aws`, `~/.ssh`.
 - **Read-write mounts:** Current project path; `~/.claude/projects/` for session history.
 - **Impossible:** Access files outside the mount list; modify plugins/skills code; swap your credentials; escape the microVM.
 
@@ -52,8 +52,8 @@ inside, the rest of your Mac might as well not exist.
 
 On top of sbx, `cdc` adds the bits you'd otherwise have to do by hand:
 
-- Automatic credential injection from your macOS Keychain, so Claude is
-  logged in inside the sandbox without running `/login`
+- First-run browser login: `cdc` opens `claude.com` in your Mac browser so
+  you can sign in once; the sandbox owns those credentials from then on
 - Session history sharing between host and sandbox, so `cdc -c` resumes a
   conversation you had with plain `claude` and vice versa
 - Plugin and skill sharing (read-only) so your configured workflows work
@@ -92,9 +92,8 @@ With the default mount policy, these things are **physically impossible**:
   mounted read-only. It can *use* them (see the next section), but it cannot
   swap in an attacker's token or corrupt your keys.
 - **Claude cannot access your macOS Keychain directly.** Keychain is a macOS
-  API, and the sandbox is Linux. It only sees the specific credential that
-  `cdc` injects (the Claude Code OAuth token) -- not anything else stored
-  there.
+  API, and the sandbox is Linux. The sandbox holds its own login credentials;
+  your host Keychain is never read or shared.
 - **Claude cannot escape the sandbox.** sbx uses microVM (hypervisor-level)
   isolation, not just containers. Breaking out requires a VM escape.
 
@@ -246,48 +245,18 @@ When it finishes, follow its on-screen instructions to add Homebrew to
 your shell. Then open a new terminal window and run `brew --version`
 again to confirm.
 
-### Step 2: install Claude Code and log in
+### Step 2: install Claude Code
 
 [Claude Code](https://claude.com/claude-code) is Anthropic's official
-command-line interface for Claude. `cdc` runs it inside the sandbox, but
-it also needs to be installed on your host so it can authenticate once
-and so the escape hatch (`cdc --cdc-no-sandbox`) works.
+command-line interface for Claude. `cdc` runs it inside the sandbox, and
+also installs it on your host for the escape hatch (`cdc --cdc-no-sandbox`).
 
 Follow the install instructions on [claude.com/claude-code](https://claude.com/claude-code)
 for your platform. For macOS, the installer puts `claude` on your PATH.
 
-After install, **run Claude Code once** to log in:
-
-```bash
-claude
-```
-
-Inside Claude, press `/` and choose `/login` (or type it). A browser
-window opens -- sign in with your Claude account. Come back to the
-terminal, and Claude will confirm you're logged in. Type `/quit` to exit.
-
-This one-time login stores an OAuth token in your Mac's Keychain. `cdc`
-will read that token (with your permission) and pass it into the sandbox
-so you don't have to log in again later.
-
-**Verify:**
-
-```bash
-claude auth status
-```
-
-You should see output like:
-
-```json
-{
-  "loggedIn": true,
-  "authMethod": "claude.ai",
-  ...
-}
-```
-
-If `loggedIn` is `false`, run `claude` again and try `/login` inside the
-session.
+You do **not** need to log into the host `claude` for `cdc` to work. `cdc`
+handles authentication inside the sandbox on first run (see the
+[auth flow below](#how-it-works)).
 
 ### Step 3: install sbx (Docker Sandboxes)
 
@@ -411,6 +380,18 @@ you can create one for free at
 [hub.docker.com/signup](https://hub.docker.com/signup). sbx needs this to
 authenticate you; there's no cost.
 
+**Claude reports 401 or "Please run /login" inside cdc.** Your sandbox's
+stored credentials are dead (rare — refresh tokens last months). Recover
+with:
+
+```bash
+cdc --cdc-rm
+cdc
+```
+
+The next run re-creates the sandbox, reopens the browser, and you sign in
+once.
+
 **`cdc --cdc-doctor` says "claude installed on host" is WARN, not FAIL** --
 that just means the host `claude` binary is missing, so the
 `--cdc-no-sandbox` escape hatch won't work. `cdc` itself still works fine;
@@ -504,9 +485,9 @@ cdc
 
 The token is stored in sbx's host-side proxy store. Agents running inside
 the sandbox cannot read the token directly — they can only *use* it by
-making GitHub API calls that the proxy intercepts. This is why `cdc` uses
-sbx secrets for GitHub instead of injecting a credential file into the
-sandbox filesystem the way it does for the Claude Code OAuth token.
+making GitHub API calls that the proxy intercepts. This is different from
+Claude Code credentials, which are stored directly in the sandbox's own
+filesystem via the first-run login flow.
 
 A prompt-injected agent can still *use* your GitHub permissions while it's
 running (delete repos, push malicious code, etc.). Scope your token or
@@ -533,11 +514,21 @@ Budget a couple minutes on first ever run, ~20-30 seconds on subsequent
 first-runs for new directories, and near-instant on reconnect to an existing
 sandbox.
 
-Inside the sandbox, Claude is already authenticated (auto-injected from your
-macOS Keychain), already in bypass-permissions mode, and already has access
-to your session history and plugins.
+Inside the sandbox, Claude is already authenticated (credentials live in the
+sandbox from your first-run login), already in bypass-permissions mode, and
+already has access to your session history and plugins.
 
 ## How it works
+
+**Auth flow.** The first time you run `cdc` in a new project directory, a
+browser tab opens on `claude.com` — sign in there, and you're done. `cdc`
+creates a sandbox, runs `claude auth login` inside it, and opens the URL in
+your Mac browser. The sandbox owns the resulting login. Every subsequent `cdc`
+run in the same directory attaches straight to the existing sandbox — no second
+login, no re-auth.
+
+Credentials never leave the sandbox. `cdc` does not read your macOS Keychain;
+host-side `claude` logins and sandbox logins are independent.
 
 On every invocation, `cdc` does this:
 
@@ -551,11 +542,12 @@ On every invocation, `cdc` does this:
    with the resolved mount list and a deterministic name derived from the
    directory path. The sandbox persists -- subsequent `cdc` invocations in the
    same directory reconnect to it.
-4. **Inject credentials.** Pipe the host's Claude Code OAuth token from
-   macOS Keychain (via `security find-generic-password`) directly into the
-   sandbox's `/home/agent/.claude/.credentials.json`. No intermediate shell
-   variable -- piped straight through to prevent accidental leakage via
-   `bash -x`.
+4. **First-run login (new sandboxes only).** If this is the first `cdc`
+   invocation for this directory, `cdc` runs `claude auth login` inside the
+   sandbox. Claude prints an OAuth URL, `cdc` opens it in your Mac browser,
+   and you sign in on `claude.com`. The sandbox stores the resulting
+   credentials at `/home/agent/.claude/.credentials.json`. Every subsequent
+   `cdc` run in the same directory reuses those credentials — no second login.
 5. **Set up symlinks.** Inside the sandbox, symlink
    `/home/agent/.claude/{projects,plugins,skills}` to the mounted host paths
    at `/Users/you/.claude/{projects,plugins,skills}`. This is how session
@@ -784,12 +776,12 @@ You can also stop all running sandboxes manually at any time with
 
 **How does authentication work?**
 
-`cdc` extracts your host's Claude Code OAuth token from macOS Keychain via
-`security find-generic-password -s "Claude Code-credentials"` and pipes it
-into `/home/agent/.claude/.credentials.json` inside the sandbox via
-`sbx exec -i`. This happens on every invocation, so token refreshes on the
-host propagate to the sandbox automatically. The token never lands in a
-shell variable, so `bash -x` cannot leak it.
+On first run for a new directory, `cdc` runs `claude auth login` inside the
+sandbox. Claude prints an OAuth URL; `cdc` opens it in your Mac browser with
+`open`. You sign in on `claude.com`, and the sandbox stores the resulting
+credentials at `/home/agent/.claude/.credentials.json`. Every subsequent `cdc`
+invocation for that directory skips the login — the sandbox already has valid
+credentials. `cdc` does not touch the macOS Keychain.
 
 **Can I share sessions between host `claude` and `cdc`?**
 
@@ -802,12 +794,11 @@ one is resumable from the other with `claude -c` / `cdc -c`.
 
 **Can I use this on Linux or Windows?**
 
-Linux: probably, with tweaks. The Keychain extraction step is macOS-specific
-(`security` command). On Linux, Claude Code stores credentials in a regular
-file at `~/.claude/.credentials.json`; `cdc` would need a code path that
-reads that file instead of calling `security`. PRs welcome.
+Linux: probably, with tweaks. `cdc` uses `open` (macOS) to launch the OAuth
+URL in a browser during first-run login; on Linux you'd substitute `xdg-open`.
+The rest of the flow is standard `sbx` + bash. PRs welcome.
 
-Windows: untested and unplanned. Would require a different credential flow.
+Windows: untested and unplanned.
 
 **Can I use this with non-Claude agents (Codex, Gemini, etc.)?**
 
