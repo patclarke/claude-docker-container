@@ -480,6 +480,17 @@ inject_credentials() {
 	return 0
 }
 
+sandbox_cred_file_exists() {
+	# Returns 0 iff /home/agent/.claude/.credentials.json exists and is non-empty
+	# inside the named sandbox. run_sandbox uses this to decide whether to run
+	# the login flow on attach. Stdin redirect from /dev/null mirrors
+	# setup_share_symlinks — sbx exec otherwise steals cdc's stdin and breaks
+	# the subsequent foreground attach.
+	local name="$1"
+	sbx exec "$name" test -s /home/agent/.claude/.credentials.json \
+		</dev/null >/dev/null 2>&1
+}
+
 setup_share_symlinks() {
 	local name="$1" home="$HOME"
 	# Redirect stdin from /dev/null so this sbx exec doesn't steal cdc's stdin.
