@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          brew install shellcheck shfmt bats-core
+
+      - name: shellcheck
+        run: shellcheck bin/cdc
+
+      - name: shfmt
+        run: shfmt -d bin/cdc
+
+      - name: bash syntax check
+        run: bash -n bin/cdc
+
+      - name: bats
+        run: bats tests/
