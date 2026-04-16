@@ -12,11 +12,11 @@ unbounded one. See [`README.md`](README.md) for user-facing documentation.
 The implementation is intentionally small: one shell script, one config file,
 one README. Resist the urge to grow it into a framework.
 
-**Auth flow:** `cdc` extracts the Claude Code token from the macOS Keychain
-(`security find-generic-password -s 'Claude Code-credentials'`) and injects it
-into the sandbox on every invocation via `sbx exec`. Claude inside the sandbox
-runs as user `agent` and looks for credentials at
-`/home/agent/.claude/.credentials.json`.
+**Auth flow:** On first invocation, `cdc` runs `claude auth login` inside the
+sandbox to establish credentials. Claude stores them at
+`/home/agent/.claude/.credentials.json`. On subsequent invocations, the sandbox
+reuses those credentials. GitHub authentication uses sbx's network proxy, not
+local files.
 
 ## Repository layout
 
@@ -49,16 +49,16 @@ execution.
    removals. Strip ancestor mounts. Compute a deterministic sandbox name from
    cwd. Build the final `sbx` argv.
 3. **Exec.** If the named sandbox doesn't exist, create it with
-   `sbx create claude <primary> <mounts>`. Then inject credentials via
-   `sbx exec -i`, create sharing symlinks via `sbx exec`, and finally attach
-   with `sbx exec -it <name> env ... claude <claude-args>` in the foreground
-   (not via `exec` — we need to return to cdc after claude exits for cleanup).
-   `sbx exec` auto-starts a stopped sandbox (per `sbx exec --help`), so a
-   prior cdc session that ended in `sbx stop` re-attaches transparently — no
-   explicit start step needed. If the first attach exits 137 (sbx rapid-call
-   race — see lesson 5), retry once after a longer wait. After claude exits,
-   `cdc` runs `sbx stop` to free the microVM's resources. Pass
-   `--cdc-keep-running` to skip the stop. Propagate sbx's exit code.
+   `sbx create claude <primary> <mounts>`. Then create sharing symlinks via
+   `sbx exec` and finally attach with `sbx exec -it <name> env ... claude
+   <claude-args>` in the foreground (not via `exec` — we need to return to cdc
+   after claude exits for cleanup). `sbx exec` auto-starts a stopped sandbox
+   (per `sbx exec --help`), so a prior cdc session that ended in `sbx stop`
+   re-attaches transparently — no explicit start step needed. If the first
+   attach exits 137 (sbx rapid-call race — see lesson 5), retry once after a
+   longer wait. After claude exits, `cdc` runs `sbx stop` to free the microVM's
+   resources. Pass `--cdc-keep-running` to skip the stop. Propagate sbx's exit
+   code.
 
 The `--cdc-dry-run`, `--cdc-doctor`, and `--cdc-no-sandbox` flags short-circuit
 the exec phase in different ways; they still run parse and the relevant parts
@@ -86,8 +86,8 @@ The original design spec had three "unknowns" that live testing resolved:
    Solution: mount specific subpaths (`projects`, `plugins`, `skills`) as
    additional workspaces at their absolute host paths, then symlink
    `/home/agent/.claude/{projects,plugins,skills}` to those host paths
-   post-create via `sbx exec`. Credentials are injected separately via
-   `sbx exec -i` pipe from `security find-generic-password`.
+   post-create via `sbx exec`. Credentials are established via the first-run
+   `claude auth login` flow.
 
 Additional runtime surprises found during implementation:
 
@@ -109,11 +109,10 @@ Additional runtime surprises found during implementation:
    retries the attach once on exit 137 with a longer wait. Worth reporting
    upstream.
 
-6. **`bash -x` leaks secrets:** The first version of `inject_credentials`
-   stored the extracted Keychain token in a shell variable, which
-   `bash -x` would expand and print to stderr. The current version pipes
-   directly from `security` into `sbx exec -i` without an intermediate
-   variable.
+6. **Credentials managed by sbx:** Claude Code credentials are stored in the
+   sandbox via sbx's own login flow (`claude auth login`). The host-side
+   keychain is not accessed. This simplifies the authentication flow and
+   eliminates token leakage risks.
 
 7. **TERM/COLORTERM env passthrough:** `sbx exec` does not inherit the
    host's terminal environment. Claude inside the sandbox defaults to
