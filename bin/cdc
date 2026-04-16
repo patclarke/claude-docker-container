@@ -480,6 +480,50 @@ inject_credentials() {
 	return 0
 }
 
+run_login_flow() {
+	# Run `claude auth login` inside the sandbox. Tail its stdout; when we
+	# spot the OAuth URL, open the user's Mac browser on it. Child output
+	# still reaches the user's terminal (we `tee` it), so any paste-back
+	# prompt claude emits is visible and interactive.
+	#
+	# Returns the child's exit code. Zero = creds written to
+	# /home/agent/.claude/.credentials.json inside the sandbox. Non-zero =
+	# user cancelled, network failure, etc. — caller aborts.
+	local name="$1"
+
+	local fifo="${TMPDIR:-/tmp}/cdc-login-$$.fifo"
+	mkfifo "$fifo"
+
+	# Background reader: tee the child's stdout to the user's terminal AND
+	# watch for the URL.
+	(
+		local url_opened=0
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			printf '%s\n' "$line"
+			if [[ $url_opened -eq 0 ]]; then
+				local url
+				url="$(printf '%s\n' "$line" | extract_oauth_url)" || url=""
+				if [[ -n "$url" ]]; then
+					open "$url" >/dev/null 2>&1 || true
+					url_opened=1
+				fi
+			fi
+		done <"$fifo"
+	) &
+	local reader_pid=$!
+
+	sbx exec -it "$name" claude auth login >"$fifo"
+	local rc=$?
+
+	wait "$reader_pid" 2>/dev/null || true
+	rm -f "$fifo"
+
+	if [[ $rc -ne 0 ]]; then
+		echo "cdc: login did not complete (exit $rc). Re-run cdc to try again." >&2
+	fi
+	return $rc
+}
+
 extract_oauth_url() {
 	# Read stdin, emit the first Anthropic OAuth-authorize URL found. Exit
 	# non-zero if none seen. The URL prefix is deliberately tight
