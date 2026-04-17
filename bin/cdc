@@ -465,64 +465,17 @@ spinner_stop() {
 }
 
 run_login_flow() {
-	# Run `claude auth login` inside the sandbox. Tail its stdout for the
-	# OAuth URL and open it in the Mac browser. As soon as claude starts
-	# listening on its loopback port for the OAuth callback, set up an
-	# IPv4→IPv6 bridge inside the sandbox (socat) and publish the port
-	# via `sbx ports`, so the Mac browser's redirect to
-	# http://localhost:<PORT>/callback lands on claude — no copy-paste.
-	#
-	# Returns the child's exit code. Zero = login succeeded.
+	# Run `claude auth login` inside the sandbox. The browser opens on the
+	# Mac via `open <url>`; after the user authorizes, Anthropic shows a
+	# verification code to paste back into this terminal. sbx's proxy
+	# captures the resulting token host-side (the sandbox only keeps stubs).
 	local name="$1"
 
-	# Defensive: kill any stale claude auth login processes in the sandbox
-	# so lsof returns only this run's listener. Ignore errors.
 	sbx exec "$name" pkill -f 'claude auth login' </dev/null >/dev/null 2>&1 || true
 
 	local fifo="${TMPDIR:-/tmp}/cdc-login-$$.fifo"
 	mkfifo "$fifo"
 
-	# State file that the port-bridger writes its published port into, so
-	# the main thread knows what to unpublish at the end.
-	local state_file="${TMPDIR:-/tmp}/cdc-login-$$.state"
-	: >"$state_file"
-
-	# Background port-bridger: polls for claude's IPv6 listener, sets up the
-	# bridge, publishes the port. Runs until either the main login exits or
-	# the bridge is established and we exit the poll loop.
-	(
-		local attempt port bridge_port
-		local max="${CDC_BRIDGE_POLL_MAX:-30}"
-		local interval="${CDC_BRIDGE_POLL_INTERVAL:-0.5}"
-		for attempt in $(seq 1 "$max"); do
-			port="$(
-				sbx exec "$name" lsof -iTCP -sTCP:LISTEN -n -P -a -c claude \
-					</dev/null 2>/dev/null |
-					awk '$NF=="(LISTEN)" && $9 ~ /\[::1\]:/ {
-					gsub(/.*:/, "", $9); print $9
-				}' |
-					tail -n1
-			)"
-			if [[ -n "$port" ]]; then
-				bridge_port=$((port + 1))
-				# Start socat inside the sandbox, bridging IPv4 0.0.0.0:bridge → IPv6 [::1]:port.
-				# socat must persist after the exec returns, hence the sh -c background launch.
-				sbx exec "$name" sh -c \
-					"socat TCP4-LISTEN:${bridge_port},fork,reuseaddr TCP6:[::1]:${port} >/dev/null 2>&1 &" \
-					</dev/null >/dev/null 2>&1
-				# Publish Mac's port → sandbox's bridge port
-				if sbx ports "$name" --publish "${port}:${bridge_port}" </dev/null >/dev/null 2>&1; then
-					printf '%s %s\n' "$port" "$bridge_port" >"$state_file"
-				fi
-				exit 0
-			fi
-			sleep "$interval"
-		done
-	) &
-	local bridger_pid=$!
-
-	# Reader: tee child stdout to the user's terminal; run `open <url>` on
-	# first OAuth URL seen.
 	(
 		local url_opened=0
 		while IFS= read -r line || [[ -n "$line" ]]; do
@@ -543,19 +496,7 @@ run_login_flow() {
 	sbx exec -it "$name" claude auth login >"$fifo" || rc=$?
 
 	wait "$reader_pid" 2>/dev/null || true
-	kill "$bridger_pid" 2>/dev/null || true
-	wait "$bridger_pid" 2>/dev/null || true
 	rm -f "$fifo"
-
-	# Cleanup: unpublish port, kill socat inside sandbox.
-	if [[ -s "$state_file" ]]; then
-		local published_port bridge_port_saved
-		read -r published_port bridge_port_saved <"$state_file"
-		sbx ports "$name" --unpublish "${published_port}:${bridge_port_saved}" \
-			</dev/null >/dev/null 2>&1 || true
-	fi
-	sbx exec "$name" pkill -f 'socat TCP4-LISTEN' </dev/null >/dev/null 2>&1 || true
-	rm -f "$state_file"
 
 	if [[ $rc -ne 0 ]]; then
 		echo "cdc: login did not complete (exit $rc). Re-run cdc to try again." >&2
@@ -577,8 +518,9 @@ extract_oauth_url() {
 
 wait_for_sandbox_ready() {
 	# After `sbx create`, the sbx daemon takes a moment before exec calls
-	# stop SIGKILL'ing (see CLAUDE.md Lesson 5). Poll a cheap exec until
-	# it returns non-137. Bail after max attempts to avoid hanging.
+	# succeed. Poll until `sbx exec true` exits 0 — any other code (137
+	# SIGKILL, 1 generic error) means the sandbox isn't ready yet.
+	# Bail after max attempts to avoid hanging.
 	local name="$1"
 	local max="${CDC_READY_POLL_MAX:-30}"
 	local interval="${CDC_READY_POLL_INTERVAL:-0.5}"
@@ -586,7 +528,7 @@ wait_for_sandbox_ready() {
 	for attempt in $(seq 1 "$max"); do
 		rc=0
 		sbx exec "$name" true </dev/null >/dev/null 2>&1 || rc=$?
-		if [[ $rc -ne 137 ]]; then
+		if [[ $rc -eq 0 ]]; then
 			return 0
 		fi
 		sleep "$interval"
