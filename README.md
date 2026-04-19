@@ -64,8 +64,8 @@ On top of sbx, `cdc` adds the bits you'd otherwise have to do by hand:
 You keep typing the same `claude ...` commands you're used to. You just type
 `cdc` instead. Example:
 ```
-claude --remote-control --chrome   # normal
-cdc --remote-control --chrome      # sandboxed
+claude --remote-control   # normal
+cdc --remote-control      # sandboxed
 ```
 
 ## What `cdc` guarantees
@@ -155,6 +155,20 @@ sandbox can read and write. If your project contains `.env` files with
 secrets, a deploy key, or other sensitive files, the sandbox sees them.
 Don't commit secrets into your project and also don't mount them into it.
 
+### `claude --chrome` is not supported inside the sandbox
+
+Claude's Chrome integration uses Chrome's **native messaging** protocol —
+Chrome spawns a helper binary on the host and communicates via stdio pipes,
+plus a host-side unix domain socket (`/tmp/claude-mcp-browser-bridge-<user>/`)
+for IPC between claude sessions. Neither mechanism crosses the sbx
+microVM boundary: Chrome cannot spawn processes inside a Linux VM from
+macOS, and unix sockets do not work across kernel boundaries.
+
+If you want Chrome integration, run `claude --chrome` directly on the
+host (outside cdc), or use `cdc --cdc-no-sandbox --chrome`. Note that
+`--cdc-no-sandbox` skips the sandbox entirely — you lose the safety
+boundary that cdc provides.
+
 ### `cdc --cdc-no-sandbox` bypasses everything
 
 The escape hatch runs plain `claude` on your host with the forwarded args.
@@ -195,12 +209,12 @@ Details, verification commands, and alternatives live in [Install](#install).
 ## Quick Use
 
 ```bash
-caffeinate -dims cdc --remote-control --chrome -c
+caffeinate -dims cdc --remote-control -c
 ```
 
 - `cdc` launches Claude inside a sandbox for the current directory
 - `caffeinate -dims` keeps macOS awake while the sandbox runs
-- `--remote-control --chrome -c` are standard Claude flags; everything non-`--cdc-*` passes through
+- `--remote-control -c` are standard Claude flags; everything non-`--cdc-*` passes through
 - More examples and flags: see [Quick start](#quick-start) and [Reference](#reference)
 
 ## Install
@@ -394,6 +408,11 @@ that just means the host `claude` binary is missing, so the
 it uses the claude that lives inside the sandbox. Fix it by revisiting
 Step 3 if you want the escape hatch.
 
+**"Claude in Chrome (Beta)" prompt appears inside cdc but nothing works.**
+Chrome integration relies on host-only APIs (native messaging + unix
+sockets) that don't reach the sandbox. Use `cdc --cdc-no-sandbox --chrome`
+or run host `claude --chrome` directly.
+
 **Anything else** -- open an issue at
 [github.com/patclarke/claude-docker-container/issues](https://github.com/patclarke/claude-docker-container/issues)
 with the output of `cdc --cdc-doctor` and I'll take a look.
@@ -494,14 +513,14 @@ switch to fine-grained GitHub tokens if that's a concern. See
 
 ```bash
 cd ~/workspace/my-project
-caffeinate -dims cdc --remote-control --chrome -c
+caffeinate -dims cdc --remote-control -c
 ```
 
 Breakdown:
 
 - `caffeinate -dims` -- keep your Mac awake while the session runs
 - `cdc` -- launch Claude Code inside a sandbox for this directory
-- `--remote-control --chrome -c` -- regular Claude Code flags, passed through
+- `--remote-control -c` -- regular Claude Code flags, passed through
   to the agent inside the sandbox
 
 First invocation in a new directory is slow -- sbx downloads the sandbox
@@ -683,7 +702,7 @@ cdc
 cdc -c
 
 # Forward arbitrary Claude Code flags
-cdc --remote-control --chrome -c
+cdc --remote-control -c
 
 # Two parallel sandboxes in the same directory
 cdc --cdc-name experiment-a -c

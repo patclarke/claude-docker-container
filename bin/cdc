@@ -733,6 +733,24 @@ parse_args() {
 	done
 }
 
+warn_if_chrome_requested() {
+	# --chrome (Chrome integration) uses Chrome native messaging, which is
+	# structurally incompatible with the sandbox — Chrome can't spawn
+	# processes inside a VM, and the host unix socket it uses isn't
+	# reachable across kernel boundaries. The feature will prompt for
+	# setup but then silently fail to connect. See README "claude --chrome
+	# is not supported inside the sandbox."
+	local arg
+	for arg in "${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}"; do
+		if [[ "$arg" == "--chrome" ]]; then
+			echo "cdc: warning: --chrome is not supported inside the sandbox." >&2
+			echo "     Chrome integration uses host-only APIs (native messaging)." >&2
+			echo "     Use 'cdc --cdc-no-sandbox --chrome' or host 'claude --chrome'." >&2
+			return 0
+		fi
+	done
+}
+
 dry_run_output() {
 	load_mounts_config
 	resolve_mounts
@@ -790,6 +808,7 @@ main() {
 		exec claude "${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}"
 	fi
 
+	warn_if_chrome_requested
 	ensure_github_secret
 	load_mounts_config
 	resolve_mounts
