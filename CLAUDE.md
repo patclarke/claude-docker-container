@@ -12,11 +12,13 @@ unbounded one. See [`README.md`](README.md) for user-facing documentation.
 The implementation is intentionally small: one shell script, one config file,
 one README. Resist the urge to grow it into a framework.
 
-**Auth flow:** `cdc` extracts the Claude Code token from the macOS Keychain
-(`security find-generic-password -s 'Claude Code-credentials'`) and injects it
-into the sandbox on every invocation via `sbx exec`. Claude inside the sandbox
-runs as user `agent` and looks for credentials at
-`/home/agent/.claude/.credentials.json`.
+**Auth flow:** `cdc` does not drive Claude Code authentication. sbx's
+proxy handles it — if the sandbox has no auth stored (no API key via
+`sbx secret set -g anthropic`, no prior `/login`), the claude REPL itself
+prompts the user to run `/login` on first attach. The OAuth flow
+completes host-side via sbx's proxy; the sandbox only gets proxy-managed
+stubs in `/home/agent/.claude/.credentials.json`. `cdc`'s only auth-
+related behavior is to stay out of the way.
 
 ## Repository layout
 
@@ -49,16 +51,16 @@ execution.
    removals. Strip ancestor mounts. Compute a deterministic sandbox name from
    cwd. Build the final `sbx` argv.
 3. **Exec.** If the named sandbox doesn't exist, create it with
-   `sbx create claude <primary> <mounts>`. Then inject credentials via
-   `sbx exec -i`, create sharing symlinks via `sbx exec`, and finally attach
-   with `sbx exec -it <name> env ... claude <claude-args>` in the foreground
-   (not via `exec` — we need to return to cdc after claude exits for cleanup).
-   `sbx exec` auto-starts a stopped sandbox (per `sbx exec --help`), so a
-   prior cdc session that ended in `sbx stop` re-attaches transparently — no
-   explicit start step needed. If the first attach exits 137 (sbx rapid-call
-   race — see lesson 5), retry once after a longer wait. After claude exits,
-   `cdc` runs `sbx stop` to free the microVM's resources. Pass
-   `--cdc-keep-running` to skip the stop. Propagate sbx's exit code.
+   `sbx create claude <primary> <mounts>`. Then create sharing symlinks via
+   `sbx exec` and finally attach with `sbx exec -it <name> env ... claude
+   <claude-args>` in the foreground (not via `exec` — we need to return to cdc
+   after claude exits for cleanup). `sbx exec` auto-starts a stopped sandbox
+   (per `sbx exec --help`), so a prior cdc session that ended in `sbx stop`
+   re-attaches transparently — no explicit start step needed. If the first
+   attach exits 137 (sbx rapid-call race — see lesson 5), retry once after a
+   longer wait. After claude exits, `cdc` runs `sbx stop` to free the microVM's
+   resources. Pass `--cdc-keep-running` to skip the stop. Propagate sbx's exit
+   code.
 
 The `--cdc-dry-run`, `--cdc-doctor`, and `--cdc-no-sandbox` flags short-circuit
 the exec phase in different ways; they still run parse and the relevant parts
@@ -86,8 +88,8 @@ The original design spec had three "unknowns" that live testing resolved:
    Solution: mount specific subpaths (`projects`, `plugins`, `skills`) as
    additional workspaces at their absolute host paths, then symlink
    `/home/agent/.claude/{projects,plugins,skills}` to those host paths
-   post-create via `sbx exec`. Credentials are injected separately via
-   `sbx exec -i` pipe from `security find-generic-password`.
+   post-create via `sbx exec`. Credentials are handled by sbx's proxy —
+   `cdc` does not drive login.
 
 Additional runtime surprises found during implementation:
 
@@ -102,18 +104,17 @@ Additional runtime surprises found during implementation:
    the `-w "$pwd_abs"` argument. Reported by @wmaykut as issue #6.
 
 5. **sbx rapid-call race:** Running several sbx subcommands back-to-back
-   (`create`, `exec` for inject, `exec` for symlinks, final `exec` to
+   (`create`, `exec` for symlinks, `exec` for sandbox notes, final `exec` to
    attach) leaves the sbx daemon in a state where the next interactive
    exec is SIGKILL'd at startup (exit 137). A 1-second `sleep` before the
    final attach usually avoids this, but not always — `run_sandbox` also
    retries the attach once on exit 137 with a longer wait. Worth reporting
    upstream.
 
-6. **`bash -x` leaks secrets:** The first version of `inject_credentials`
-   stored the extracted Keychain token in a shell variable, which
-   `bash -x` would expand and print to stderr. The current version pipes
-   directly from `security` into `sbx exec -i` without an intermediate
-   variable.
+6. **Credentials managed by sbx:** Claude Code credentials are stored in the
+   sandbox via sbx's own login flow (`claude auth login`). The host-side
+   keychain is not accessed. This simplifies the authentication flow and
+   eliminates token leakage risks.
 
 7. **TERM/COLORTERM env passthrough:** `sbx exec` does not inherit the
    host's terminal environment. Claude inside the sandbox defaults to
@@ -128,12 +129,15 @@ Key sbx facts that govern the implementation:
   initial working directory with `sbx exec -w` to land the agent at the
   real host path.
 - **sbx has no env var flag:** `sbx create` only supports `--branch`,
-  `--memory`, `--name`, `--template`. Credentials and other config must be
-  injected via `sbx exec`.
-- **Bypass mode is the default:** sbx's claude image has
-  `"defaultMode": "bypassPermissions"` pre-configured in
-  `/home/agent/.claude/settings.json`. Do not add any bypass flag as a
-  default in `cdc`.
+  `--memory`, `--name`, `--template`. Config that requires shell environment
+  (TERM, LANG, etc.) must be passed via `env VAR=... claude` in the `sbx exec`
+  invocation.
+- **Bypass mode via CLI flag:** sbx's claude image has
+  `"defaultMode": "bypassPermissions"` in its baked-in `settings.json`, but
+  Claude Code ignores that setting in environments it considers "Remote"
+  (IS_SANDBOX=1 triggers this). `cdc` therefore always passes
+  `--dangerously-skip-permissions` explicitly. Use `--cdc-safe-mode` to
+  suppress it.
 - **Create vs. attach:** Passing workspace paths to an existing sandbox errors
   with "sandbox X already exists and can't be given new workspaces". The
   correct flow: `sbx create claude <primary> <mounts>` once, then
@@ -218,8 +222,18 @@ Conventional format:
 
 ## Testing
 
-There is **no automated test suite.** This is a bash wrapper around a CLI on
-a specific developer machine; the validation model is a manual checklist.
+Tests live in `tests/` and run via `bats tests/`. When changing
+`bin/cdc`:
+
+1. **Pure helpers** (e.g. `compute_sandbox_name`, `mount_path_only`):
+   add unit tests in `tests/unit-*.bats` with fixtures in
+   `tests/fixtures/`.
+2. **Orchestration branches** (e.g. `run_sandbox`, `run_preflight`):
+   add integration tests in `tests/integration-*.bats` using the mock
+   `sbx` helper in `tests/helpers/`.
+3. **End-to-end flows** (first attach, auth prompt): still a manual
+   scenario — the bats layer does not attach a live sandbox. Walk the
+   checklist below before opening a PR.
 
 When changing `bin/cdc`, walk through the full validation matrix before opening
 a PR:
@@ -257,9 +271,6 @@ This repo intentionally does one thing. **Do not** add:
   wrapper around another CLI.
 - Cross-host state sync, a daemon, a plugin system, or a TUI. They belong in
   a different project.
-- Automated test harnesses. Manual validation is adequate for a wrapper
-  script and the overhead of setting up test infrastructure around `sbx`
-  would dwarf the script itself.
 
 If a change you're considering doesn't fit in a `feat:` or `fix:` commit
 against `bin/cdc`, `README.md`, `CLAUDE.md`, or `.gitignore`, it probably

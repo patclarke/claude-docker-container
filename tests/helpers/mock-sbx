@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+: "${CDC_TEST_LOG:=/tmp/cdc-test-log}"
+{ printf 'sbx'; for a in "$@"; do printf ' %q' "$a"; done; printf '\n'; } >>"$CDC_TEST_LOG"
+case "$1" in
+ls | create | stop | rm) exit 0 ;;
+esac
+exit 1

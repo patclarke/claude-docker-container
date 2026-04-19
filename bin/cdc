@@ -464,22 +464,6 @@ spinner_stop() {
 	CDC_SPINNER_PID=""
 }
 
-inject_credentials() {
-	local name="$1"
-	# SECURITY: never assign the token to a shell variable — `bash -x` would
-	# expand it and leak the secret to stderr. Pipe straight from `security`
-	# into `sbx exec -i` so the token exists only in the stdin pipe.
-	if ! security find-generic-password -s 'Claude Code-credentials' -a "$USER" -w 2>/dev/null |
-		sbx exec -i "$name" sh -c '
-			mkdir -p /home/agent/.claude &&
-			cat > /home/agent/.claude/.credentials.json &&
-			chmod 600 /home/agent/.claude/.credentials.json
-		' >/dev/null 2>&1; then
-		echo "cdc: no Claude Code credentials in macOS Keychain, or injection failed; sandbox claude may prompt /login" >&2
-	fi
-	return 0
-}
-
 setup_share_symlinks() {
 	local name="$1" home="$HOME"
 	# Redirect stdin from /dev/null so this sbx exec doesn't steal cdc's stdin.
@@ -622,9 +606,8 @@ run_sandbox() {
 	local name
 	name="$(compute_sandbox_name)"
 
-	# Step 1: create the sandbox if it doesn't exist yet. If it exists but is
-	# stopped (cdc's own post-exit `sbx stop` leaves it that way), `sbx exec`
-	# below will auto-start it — that's documented in `sbx exec --help`.
+	# Step 1: create the sandbox if it doesn't exist yet. If it exists but
+	# stopped, `sbx exec` (below) auto-starts it.
 	if ! sandbox_exists "$name"; then
 		local create_argv=()
 		build_create_argv
@@ -635,32 +618,26 @@ run_sandbox() {
 		}
 	fi
 
-	# Tell the user cdc is still driving — `sbx create` ends by printing
-	# "To connect to this sandbox, run: sbx run <name>", which looks like an
-	# instruction but isn't (cdc is about to attach automatically). The
-	# spinner runs through the silent prep phase so a slow inject doesn't
-	# look like a freeze; it's stopped before the foreground sbx exec so it
-	# doesn't fight sbx's own output.
+	# Spinner covers the silent prep phase (symlinks, sandbox notes, race
+	# workaround sleep). Stopped before the foreground attach.
 	spinner_start "connecting claude to sandbox $name"
 
-	# Step 2: inject credentials (idempotent, refreshes token each run)
-	inject_credentials "$name"
-
-	# Step 3: set up sharing symlinks (idempotent)
+	# Step 2: set up sharing symlinks (idempotent)
 	setup_share_symlinks "$name"
 
-	# Step 3b: install sandbox-specific CLAUDE.md notes (idempotent, overwrites)
+	# Step 2b: install sandbox-specific CLAUDE.md notes (idempotent)
 	install_sandbox_notes "$name"
 
-	# sbx race workaround: rapid successive sbx calls leave the sbx daemon in
-	# a state where the next interactive exec is SIGKILL'd at startup (exit 137).
-	# A brief pause before the attach lets the daemon settle; on the rare
-	# occasion the pause isn't enough, retry once with a longer wait.
+	# sbx race workaround: sleep before the interactive attach to let the
+	# daemon settle — see CLAUDE.md Lesson 5.
 	sleep 1
 	spinner_stop
 
-	# Step 4: run claude in the foreground. We use a foreground call (not exec)
-	# so we can run cleanup (sbx stop) after claude exits.
+	# Step 3: run claude in the foreground. If claude has no auth stored,
+	# its own REPL will prompt the user to run `/login` — cdc does not
+	# drive login itself. sbx's proxy handles the OAuth flow host-side.
+	# We use foreground (not exec) so we can run cleanup (sbx stop) after
+	# claude exits.
 	local rc=0
 
 	# Register cleanup trap so sandbox stops even on Ctrl-C / SIGTERM
@@ -820,4 +797,8 @@ main() {
 	return $?
 }
 
-main "$@"
+# Only run main when executed directly; allow `source bin/cdc` from tests to
+# load function definitions without triggering the CLI dispatch.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	main "$@"
+fi

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Mock macOS `open` CLI for integration tests. Records URL(s).
+set -uo pipefail
+: "${CDC_TEST_LOG:=/tmp/cdc-test-log}"
+printf 'open %s\n' "$1" >>"$CDC_TEST_LOG"
+exit 0
