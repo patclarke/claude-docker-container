@@ -12,11 +12,13 @@ unbounded one. See [`README.md`](README.md) for user-facing documentation.
 The implementation is intentionally small: one shell script, one config file,
 one README. Resist the urge to grow it into a framework.
 
-**Auth flow:** On first invocation, `cdc` runs `claude auth login` inside the
-sandbox to establish credentials. Claude stores them at
-`/home/agent/.claude/.credentials.json`. On subsequent invocations, the sandbox
-reuses those credentials. GitHub authentication uses sbx's network proxy, not
-local files.
+**Auth flow:** `cdc` does not drive Claude Code authentication. sbx's
+proxy handles it — if the sandbox has no auth stored (no API key via
+`sbx secret set -g anthropic`, no prior `/login`), the claude REPL itself
+prompts the user to run `/login` on first attach. The OAuth flow
+completes host-side via sbx's proxy; the sandbox only gets proxy-managed
+stubs in `/home/agent/.claude/.credentials.json`. `cdc`'s only auth-
+related behavior is to stay out of the way.
 
 ## Repository layout
 
@@ -86,8 +88,8 @@ The original design spec had three "unknowns" that live testing resolved:
    Solution: mount specific subpaths (`projects`, `plugins`, `skills`) as
    additional workspaces at their absolute host paths, then symlink
    `/home/agent/.claude/{projects,plugins,skills}` to those host paths
-   post-create via `sbx exec`. Credentials are established via the first-run
-   `claude auth login` flow.
+   post-create via `sbx exec`. Credentials are handled by sbx's proxy —
+   `cdc` does not drive login.
 
 Additional runtime surprises found during implementation:
 

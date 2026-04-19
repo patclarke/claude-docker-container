@@ -464,89 +464,6 @@ spinner_stop() {
 	CDC_SPINNER_PID=""
 }
 
-run_login_flow() {
-	# Run `claude auth login` inside the sandbox. The browser opens on the
-	# Mac via `open <url>`; after the user authorizes, Anthropic shows a
-	# verification code to paste back into this terminal. sbx's proxy
-	# captures the resulting token host-side (the sandbox only keeps stubs).
-	local name="$1"
-
-	sbx exec "$name" pkill -f 'claude auth login' </dev/null >/dev/null 2>&1 || true
-
-	local fifo="${TMPDIR:-/tmp}/cdc-login-$$.fifo"
-	mkfifo "$fifo"
-
-	(
-		local url_opened=0
-		while IFS= read -r line || [[ -n "$line" ]]; do
-			printf '%s\n' "$line"
-			if [[ $url_opened -eq 0 ]]; then
-				local url
-				url="$(printf '%s\n' "$line" | extract_oauth_url)" || url=""
-				if [[ -n "$url" ]]; then
-					open "$url" >/dev/null 2>&1 || true
-					url_opened=1
-				fi
-			fi
-		done <"$fifo"
-	) &
-	local reader_pid=$!
-
-	local rc=0
-	sbx exec -it "$name" claude auth login >"$fifo" || rc=$?
-
-	wait "$reader_pid" 2>/dev/null || true
-	rm -f "$fifo"
-
-	if [[ $rc -ne 0 ]]; then
-		echo "cdc: login did not complete (exit $rc). Re-run cdc to try again." >&2
-	fi
-	return $rc
-}
-
-extract_oauth_url() {
-	# Read stdin, emit the first Anthropic OAuth-authorize URL found. Exit
-	# non-zero if none seen. The URL prefix is deliberately tight
-	# (https://claude.com/cai/oauth/authorize) so we don't mis-match unrelated
-	# links. ANSI escapes around the surrounding text are tolerated because
-	# grep -o extracts only the matched URL, not the whole line.
-	sed 's/\x1b\[[0-9;]*m//g' |
-		grep -o -m1 'https://claude\.com/cai/oauth/authorize[^[:space:]]*' |
-		head -n1 |
-		grep .
-}
-
-wait_for_sandbox_ready() {
-	# After `sbx create`, the sbx daemon takes a moment before exec calls
-	# succeed. Poll until `sbx exec true` exits 0 — any other code (137
-	# SIGKILL, 1 generic error) means the sandbox isn't ready yet.
-	# Bail after max attempts to avoid hanging.
-	local name="$1"
-	local max="${CDC_READY_POLL_MAX:-30}"
-	local interval="${CDC_READY_POLL_INTERVAL:-0.5}"
-	local attempt rc
-	for attempt in $(seq 1 "$max"); do
-		rc=0
-		sbx exec "$name" true </dev/null >/dev/null 2>&1 || rc=$?
-		if [[ $rc -eq 0 ]]; then
-			return 0
-		fi
-		sleep "$interval"
-	done
-	echo "cdc: sandbox $name did not become ready after $((max / 2))s (sbx daemon race)" >&2
-	return 1
-}
-
-sandbox_has_subscription_auth() {
-	# Check whether the sandbox has a real Claude subscription login (Max,
-	# Team, Enterprise) vs just the proxy-managed API stubs that sbx
-	# pre-populates. Proxy stubs give "Sonnet · Claude API"; a real /login
-	# gives the user's subscription tier.
-	local name="$1"
-	sbx exec "$name" claude auth status --json </dev/null 2>/dev/null |
-		grep -q '"subscriptionType":[[:space:]]*"[^"]'
-}
-
 setup_share_symlinks() {
 	local name="$1" home="$HOME"
 	# Redirect stdin from /dev/null so this sbx exec doesn't steal cdc's stdin.
@@ -689,10 +606,8 @@ run_sandbox() {
 	local name
 	name="$(compute_sandbox_name)"
 
-	# Step 1: create the sandbox if it doesn't exist yet. If it exists but is
-	# stopped (cdc's own post-exit `sbx stop` leaves it that way), `sbx exec`
-	# below will auto-start it — that's documented in `sbx exec --help`.
-	local created_sandbox=0
+	# Step 1: create the sandbox if it doesn't exist yet. If it exists but
+	# stopped, `sbx exec` (below) auto-starts it.
 	if ! sandbox_exists "$name"; then
 		local create_argv=()
 		build_create_argv
@@ -701,47 +616,28 @@ run_sandbox() {
 			echo "cdc: failed to create sandbox $name" >&2
 			return 1
 		}
-		created_sandbox=1
-	fi
-
-	# If we just created the sandbox, wait until the sbx daemon stops
-	# SIGKILL'ing exec calls (Lesson 5) before proceeding. Bail if it
-	# never recovers — better than looping forever.
-	if [[ $created_sandbox -eq 1 ]]; then
-		wait_for_sandbox_ready "$name" || return 1
-	fi
-
-	# Step 2: first-run Claude Code login. When the sandbox has no real
-	# subscription auth (fresh sandbox, or after `cdc --cdc-rm`), run
-	# `claude auth login` inside the sandbox and open the Mac browser on the
-	# OAuth URL. The login flow is interactive so it runs before the spinner.
-	if ! sandbox_has_subscription_auth "$name"; then
-		run_login_flow "$name" || {
-			echo "cdc: login flow failed; not attaching" >&2
-			return 1
-		}
 	fi
 
 	# Spinner covers the silent prep phase (symlinks, sandbox notes, race
-	# workaround sleep). Stopped before the foreground attach so it doesn't
-	# fight sbx's own output.
+	# workaround sleep). Stopped before the foreground attach.
 	spinner_start "connecting claude to sandbox $name"
 
-	# Step 3: set up sharing symlinks (idempotent)
+	# Step 2: set up sharing symlinks (idempotent)
 	setup_share_symlinks "$name"
 
-	# Step 3b: install sandbox-specific CLAUDE.md notes (idempotent, overwrites)
+	# Step 2b: install sandbox-specific CLAUDE.md notes (idempotent)
 	install_sandbox_notes "$name"
 
-	# sbx race workaround: rapid successive sbx calls leave the sbx daemon in
-	# a state where the next interactive exec is SIGKILL'd at startup (exit 137).
-	# A brief pause before the attach lets the daemon settle; on the rare
-	# occasion the pause isn't enough, retry once with a longer wait.
+	# sbx race workaround: sleep before the interactive attach to let the
+	# daemon settle — see CLAUDE.md Lesson 5.
 	sleep 1
 	spinner_stop
 
-	# Step 4: run claude in the foreground. We use a foreground call (not exec)
-	# so we can run cleanup (sbx stop) after claude exits.
+	# Step 3: run claude in the foreground. If claude has no auth stored,
+	# its own REPL will prompt the user to run `/login` — cdc does not
+	# drive login itself. sbx's proxy handles the OAuth flow host-side.
+	# We use foreground (not exec) so we can run cleanup (sbx stop) after
+	# claude exits.
 	local rc=0
 
 	# Register cleanup trap so sandbox stops even on Ctrl-C / SIGTERM
