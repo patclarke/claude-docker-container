@@ -453,7 +453,7 @@ the exact command to run.
 | `git clone/fetch/push` over HTTPS | Yes | Proxy injects the token at the network layer |
 | `curl https://api.github.com/...` | Yes | Same |
 | `git` over SSH (`git@github.com:...`) | Yes | `~/.ssh` is mounted read-only |
-| `gh` CLI (`gh pr create`, `gh issue view`, ...) | **No** | Reads its own token from the host Keychain, which the sandbox can't see |
+| `gh` CLI (`gh pr create`, `gh issue view`, ...) | **Partially** | Baked-in `gh` 2.46.0 has a known GraphQL bug; use `gh api` or `gh ... --json` flags. See sandbox notes for details. |
 
 The `gh` CLI gap is rarely a blocker in practice — anything `gh` does, you
 can do with a `curl` against `api.github.com`. Example, creating a PR:
@@ -740,11 +740,11 @@ Three reasons:
 
 **What's the 1-second delay about?**
 
-Running several `sbx` subcommands back-to-back (create, inject credentials,
-set up symlinks, attach) leaves sbx's daemon in a state where the next
-interactive exec is SIGKILL'd at startup (exit 137). A 1-second pause before
-the final attach lets the daemon settle. It's a workaround; the real fix is
-upstream in sbx. Issue to file: on the roadmap.
+Running several `sbx` subcommands back-to-back (create, set up symlinks,
+attach) leaves sbx's daemon in a state where the next interactive exec is
+SIGKILL'd at startup (exit 137). A 1-second pause before the final attach
+lets the daemon settle. It's a workaround; the real fix is upstream in sbx.
+Issue to file: on the roadmap.
 
 **Does the sandbox stay running after I exit?**
 
@@ -790,7 +790,7 @@ Windows: untested and unplanned.
 
 **Can I use this with non-Claude agents (Codex, Gemini, etc.)?**
 
-Not currently. sbx supports multiple agents, but `cdc`'s credential injection is Claude-specific (for now).
+Not currently. `cdc` is wired to launch `claude` and passes `--dangerously-skip-permissions` specifically for that binary. Supporting other agents would require changes to the script.
 
 ## License
 

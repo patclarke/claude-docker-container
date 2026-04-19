@@ -104,7 +104,7 @@ Additional runtime surprises found during implementation:
    the `-w "$pwd_abs"` argument. Reported by @wmaykut as issue #6.
 
 5. **sbx rapid-call race:** Running several sbx subcommands back-to-back
-   (`create`, `exec` for inject, `exec` for symlinks, final `exec` to
+   (`create`, `exec` for symlinks, `exec` for sandbox notes, final `exec` to
    attach) leaves the sbx daemon in a state where the next interactive
    exec is SIGKILL'd at startup (exit 137). A 1-second `sleep` before the
    final attach usually avoids this, but not always — `run_sandbox` also
@@ -129,12 +129,15 @@ Key sbx facts that govern the implementation:
   initial working directory with `sbx exec -w` to land the agent at the
   real host path.
 - **sbx has no env var flag:** `sbx create` only supports `--branch`,
-  `--memory`, `--name`, `--template`. Credentials and other config must be
-  injected via `sbx exec`.
-- **Bypass mode is the default:** sbx's claude image has
-  `"defaultMode": "bypassPermissions"` pre-configured in
-  `/home/agent/.claude/settings.json`. Do not add any bypass flag as a
-  default in `cdc`.
+  `--memory`, `--name`, `--template`. Config that requires shell environment
+  (TERM, LANG, etc.) must be passed via `env VAR=... claude` in the `sbx exec`
+  invocation.
+- **Bypass mode via CLI flag:** sbx's claude image has
+  `"defaultMode": "bypassPermissions"` in its baked-in `settings.json`, but
+  Claude Code ignores that setting in environments it considers "Remote"
+  (IS_SANDBOX=1 triggers this). `cdc` therefore always passes
+  `--dangerously-skip-permissions` explicitly. Use `--cdc-safe-mode` to
+  suppress it.
 - **Create vs. attach:** Passing workspace paths to an existing sandbox errors
   with "sandbox X already exists and can't be given new workspaces". The
   correct flow: `sbx create claude <primary> <mounts>` once, then
@@ -222,15 +225,15 @@ Conventional format:
 Tests live in `tests/` and run via `bats tests/`. When changing
 `bin/cdc`:
 
-1. **Pure helpers** (e.g. `extract_oauth_url`, `compute_sandbox_name`):
+1. **Pure helpers** (e.g. `compute_sandbox_name`, `mount_path_only`):
    add unit tests in `tests/unit-*.bats` with fixtures in
    `tests/fixtures/`.
-2. **Orchestration branches** (e.g. `run_sandbox`, `run_login_flow`):
+2. **Orchestration branches** (e.g. `run_sandbox`, `run_preflight`):
    add integration tests in `tests/integration-*.bats` using the mock
-   `sbx` and `open` helpers in `tests/helpers/`.
-3. **End-to-end flows with real OAuth** (first-run login, browser
-   handoff): still a manual scenario — the bats layer does not exercise
-   a live Anthropic login. Walk the checklist below before opening a PR.
+   `sbx` helper in `tests/helpers/`.
+3. **End-to-end flows** (first attach, auth prompt): still a manual
+   scenario — the bats layer does not attach a live sandbox. Walk the
+   checklist below before opening a PR.
 
 When changing `bin/cdc`, walk through the full validation matrix before opening
 a PR:
