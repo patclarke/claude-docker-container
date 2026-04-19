@@ -128,10 +128,12 @@ Key sbx facts that govern the implementation:
   It does NOT symlink `/home/agent/workspace` to the mount. `cdc` sets the
   initial working directory with `sbx exec -w` to land the agent at the
   real host path.
-- **sbx has no env var flag:** `sbx create` only supports `--branch`,
-  `--memory`, `--name`, `--template`. Config that requires shell environment
-  (TERM, LANG, etc.) must be passed via `env VAR=... claude` in the `sbx exec`
-  invocation.
+- **sbx exec accepts `-e KEY=VAL` for env passthrough.** Use this flag
+  (repeatable) for shell environment config that the sandbox needs but
+  that sbx doesn't inherit from the host (TERM, COLORTERM, LANG, LC_ALL,
+  TZ). cdc uses this so claude inside the sandbox gets colors, correct
+  locale, and matching timestamps. Note `sbx create` still has no env
+  flag — only `--branch`, `--memory`, `--name`, `--template`.
 - **Bypass mode via CLI flag:** sbx's claude image has
   `"defaultMode": "bypassPermissions"` in its baked-in `settings.json`, but
   Claude Code ignores that setting in environments it considers "Remote"
