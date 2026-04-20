@@ -256,6 +256,7 @@ CDC_RM_NAME=""
 CDC_KEEP_RUNNING=0
 CDC_SAFE_MODE=0
 CDC_EXTRA_MOUNTS=()
+CDC_PUBLISH_SPECS=()
 CDC_SKIP_MOUNTS=()
 CDC_CONFIG_MOUNTS=()
 CDC_RESOLVED_MOUNTS=()
@@ -697,6 +698,11 @@ parse_args() {
 		--cdc-no-mount)
 			[[ $# -ge 2 ]] || die "--cdc-no-mount requires a path"
 			CDC_SKIP_MOUNTS+=("$2")
+			shift 2
+			;;
+		--cdc-publish)
+			[[ $# -ge 2 ]] || die "--cdc-publish requires a <spec> value"
+			CDC_PUBLISH_SPECS+=("$2")
 			shift 2
 			;;
 		--cdc-no-sandbox)
