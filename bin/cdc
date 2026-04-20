@@ -555,19 +555,26 @@ build_sbx_argv() {
 	# so we cd there explicitly. Without this, claude starts in an empty dir
 	# and cannot see any project files.
 	#
-	# Wrap the claude invocation in `env VAR=... claude ...` to propagate
-	# terminal/color variables into the sandbox. sbx exec does not inherit
-	# the host's TERM/COLORTERM/etc, so without this claude defaults to
-	# minimal/no-color output.
+	# Pass terminal/locale env vars via `sbx exec -e KEY=VAL` (native
+	# passthrough) so claude inside the sandbox gets colors and proper
+	# locale. sbx exec does not inherit these from the host shell.
+	#
+	# TZ is derived so timestamps match the host clock: prefer $TZ if set,
+	# else parse /etc/localtime's symlink target. On macOS, /etc/localtime
+	# → /var/db/timezone/zoneinfo/<zone>. If neither is available, skip the
+	# flag — sandbox defaults to UTC.
+	local tz="${TZ:-}"
+	[[ -z "$tz" ]] && tz="$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')"
+
 	CDC_SBX_ARGV=(
-		sbx exec "$exec_flags" -w "$pwd_abs" "$name"
-		env
-		"TERM=${TERM:-xterm-256color}"
-		"COLORTERM=${COLORTERM:-truecolor}"
-		"LANG=${LANG:-en_US.UTF-8}"
-		"LC_ALL=${LC_ALL:-en_US.UTF-8}"
-		claude
+		sbx exec "$exec_flags" -w "$pwd_abs"
+		-e "TERM=${TERM:-xterm-256color}"
+		-e "COLORTERM=${COLORTERM:-truecolor}"
+		-e "LANG=${LANG:-en_US.UTF-8}"
+		-e "LC_ALL=${LC_ALL:-en_US.UTF-8}"
 	)
+	[[ -n "$tz" ]] && CDC_SBX_ARGV+=(-e "TZ=$tz")
+	CDC_SBX_ARGV+=("$name" claude)
 
 	# Always pass --dangerously-skip-permissions unless --cdc-safe-mode is set.
 	# We cannot rely on sbx's baked-in settings.json having defaultMode:
