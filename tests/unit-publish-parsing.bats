@@ -103,3 +103,30 @@ teardown() { cdc_teardown; }
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"cdc: published http://127.0.0.1:54321 -> sandbox:3000 (tcp)"* ]]
 }
+
+@test "unpublish_ports runs sbx ports --unpublish for each spec" {
+	CDC_PUBLISH_SPECS=(3000 8080:80)
+	run unpublish_ports test-sandbox
+	[ "$status" -eq 0 ]
+	[[ "$(cdc_log_line 1)" == "sbx ports test-sandbox --unpublish 3000" ]]
+	[[ "$(cdc_log_line 2)" == "sbx ports test-sandbox --unpublish 8080:80" ]]
+}
+
+@test "unpublish_ports swallows errors and continues" {
+	CDC_PUBLISH_SPECS=(3000 8080:80)
+	export CDC_MOCK_UNPUBLISH_EXIT=1
+	run unpublish_ports test-sandbox
+	[ "$status" -eq 0 ]
+	[[ "$(cdc_log_line 1)" == *"--unpublish 3000"* ]]
+	[[ "$(cdc_log_line 2)" == *"--unpublish 8080:80"* ]]
+	[[ "$output" == *"cdc: warn: could not unpublish 3000"* ]]
+	[[ "$output" == *"cdc: warn: could not unpublish 8080:80"* ]]
+}
+
+@test "unpublish_ports is a no-op when CDC_PUBLISH_SPECS is empty" {
+	CDC_PUBLISH_SPECS=()
+	run unpublish_ports test-sandbox
+	[ "$status" -eq 0 ]
+	run wc -l <"$CDC_TEST_LOG"
+	[ "$output" -eq 0 ]
+}
