@@ -86,3 +86,20 @@ teardown() { cdc_teardown; }
 	run publish_ports test-sandbox
 	[ "$status" -eq 2 ]
 }
+
+@test "print_resolved_bindings prints 'cdc: published' line to stderr" {
+	CDC_PUBLISH_SPECS=(3000)
+	export CDC_MOCK_PORTS_JSON='[{"sandbox_port":3000,"host_ip":"127.0.0.1","host_port":54321,"protocol":"tcp"}]'
+	run bash -c "
+		set -euo pipefail
+		export PATH='$PATH'
+		export CDC_MOCK_PORTS_JSON='$CDC_MOCK_PORTS_JSON'
+		export CDC_TEST_LOG='$CDC_TEST_LOG'
+		export HOME='$HOME'
+		source '$(cd "${BATS_TEST_DIRNAME}/.." && pwd)/bin/cdc'
+		CDC_PUBLISH_SPECS=(3000)
+		print_resolved_bindings test-sandbox 2>&1
+	"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"cdc: published http://127.0.0.1:54321 -> sandbox:3000 (tcp)"* ]]
+}

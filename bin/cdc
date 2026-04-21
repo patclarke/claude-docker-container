@@ -580,6 +580,8 @@ def sandbox_port(spec):
 wanted = {sandbox_port(s) for s in specs if sandbox_port(s) is not None}
 try:
     data = json.loads(raw)
+    if not isinstance(data, list):
+        sys.exit(1)
 except Exception:
     sys.exit(1)
 for entry in data:
@@ -588,6 +590,8 @@ for entry in data:
         continue
     host_ip = entry.get("host_ip", "127.0.0.1")
     host_port = entry.get("host_port")
+    if host_port is None:
+        continue
     proto = entry.get("protocol", "tcp")
     print(f"cdc: published http://{host_ip}:{host_port} -> sandbox:{sp} ({proto})")
 PY
