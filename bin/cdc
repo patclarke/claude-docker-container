@@ -713,6 +713,23 @@ run_sandbox() {
 	# Step 2b: install sandbox-specific CLAUDE.md notes (idempotent)
 	install_sandbox_notes "$name"
 
+	# Step 2c: publish requested ports (after create+symlinks+notes, before attach)
+	if [[ ${#CDC_PUBLISH_SPECS[@]} -gt 0 ]]; then
+		publish_ports "$name" || {
+			local pub_rc=$?
+			echo "cdc: port publish failed; aborting before attach" >&2
+			# Partial-publish cleanup: unpublish_ports swallows errors, so
+			# it's safe even for specs that never published. Otherwise an
+			# earlier successful publish leaks into the next invocation.
+			unpublish_ports "$name"
+			spinner_stop
+			if [[ $CDC_KEEP_RUNNING -eq 0 ]]; then
+				sbx stop "$name" >/dev/null 2>&1 || true
+			fi
+			return "$pub_rc"
+		}
+	fi
+
 	# sbx race workaround: sleep before the interactive attach to let the
 	# daemon settle — see CLAUDE.md Lesson 5.
 	sleep 1

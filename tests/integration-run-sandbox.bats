@@ -15,3 +15,42 @@ teardown() { cdc_teardown; }
 	repo_root="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
 	! grep -n 'inject_credentials' "$repo_root/bin/cdc"
 }
+
+@test "run_sandbox publishes ports before attach when --cdc-publish given" {
+	cdc_source
+	CDC_PUBLISH_SPECS=(3000)
+	CDC_KEEP_RUNNING=0
+	CDC_SAFE_MODE=0
+	CLAUDE_ARGS=()
+	export CDC_MOCK_PORTS_JSON='[]'
+	sandbox_exists() { return 0; }
+
+	run run_sandbox
+	[ "$status" -eq 0 ]
+	local publish_line exec_line
+	publish_line="$(grep -n -- '--publish 3000' "$CDC_TEST_LOG" | head -1 | cut -d: -f1)"
+	# The attach exec is the sbx exec that includes -w (working-dir flag);
+	# the earlier symlink and notes execs do not use -w.
+	exec_line="$(grep -n -- 'sbx exec.*-w' "$CDC_TEST_LOG" | head -1 | cut -d: -f1)"
+	[ -n "$publish_line" ]
+	[ -n "$exec_line" ]
+	[ "$publish_line" -lt "$exec_line" ]
+}
+
+@test "publish failure aborts before attach and runs unpublish cleanup" {
+	cdc_source
+	CDC_PUBLISH_SPECS=(3000 8080:80)
+	CDC_KEEP_RUNNING=0
+	CDC_SAFE_MODE=0
+	CLAUDE_ARGS=()
+	export CDC_MOCK_PORTS_JSON='[]'
+	export CDC_MOCK_PUBLISH_EXIT=2
+	sandbox_exists() { return 0; }
+
+	run run_sandbox
+	[ "$status" -ne 0 ]
+	# The attach exec includes -w; symlink/notes execs do not. Confirm no attach happened.
+	! grep -q -- 'sbx exec.*-w' "$CDC_TEST_LOG"
+	grep -q -- '--unpublish 3000' "$CDC_TEST_LOG"
+	grep -q -- '--unpublish 8080:80' "$CDC_TEST_LOG"
+}
