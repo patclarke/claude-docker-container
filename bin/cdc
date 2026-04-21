@@ -884,6 +884,15 @@ dry_run_output() {
 		done
 	fi
 	echo
+	if [[ ${#CDC_PUBLISH_SPECS[@]} -gt 0 ]]; then
+		echo "PUBLISH (would run after create):"
+		local spec sandbox_name
+		sandbox_name="$(compute_sandbox_name)"
+		for spec in "${CDC_PUBLISH_SPECS[@]}"; do
+			echo "  sbx ports $sandbox_name --publish $spec"
+		done
+		echo
+	fi
 	echo "CLAUDE_ARGS: ${CLAUDE_ARGS[*]:-<none>}"
 	echo
 	echo "COMMAND:"
