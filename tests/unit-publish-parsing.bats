@@ -66,3 +66,23 @@ teardown() { cdc_teardown; }
 	[ "$status" -eq 0 ]
 	[[ "$output" == *'"sandbox_port":3000'* ]]
 }
+
+@test "publish_ports runs sbx ports --publish for each spec in order" {
+	CDC_PUBLISH_SPECS=(3000 8080:80)
+	export CDC_MOCK_PORTS_JSON='[]'
+	run publish_ports test-sandbox
+	[ "$status" -eq 0 ]
+	local line1 line2
+	line1="$(cdc_log_line 1)"
+	line2="$(cdc_log_line 2)"
+	[[ "$line1" == "sbx ports test-sandbox --publish 3000" ]]
+	[[ "$line2" == "sbx ports test-sandbox --publish 8080:80" ]]
+}
+
+@test "publish_ports returns nonzero if sbx publish fails" {
+	CDC_PUBLISH_SPECS=(3000)
+	export CDC_MOCK_PUBLISH_EXIT=2
+	export CDC_MOCK_PORTS_JSON='[]'
+	run publish_ports test-sandbox
+	[ "$status" -eq 2 ]
+}

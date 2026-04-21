@@ -534,6 +534,68 @@ Use any of these instead — all return full data:
 NOTES
 }
 
+publish_ports() {
+	# Publish each --cdc-publish spec via `sbx ports <name> --publish <spec>`.
+	# Returns the exit code of the first failing spec (0 if all succeed).
+	# Callers should run unpublish_ports on failure to avoid leaking a
+	# partial-publish into the next cdc invocation.
+	local name="$1" spec rc
+	for spec in "${CDC_PUBLISH_SPECS[@]+"${CDC_PUBLISH_SPECS[@]}"}"; do
+		sbx ports "$name" --publish "$spec" || {
+			rc=$?
+			return "$rc"
+		}
+	done
+	print_resolved_bindings "$name"
+}
+
+print_resolved_bindings() {
+	# Best-effort: list bindings from `sbx ports <name> --json` and print
+	# one human-readable line per spec we asked for. If python3 is missing
+	# or the JSON parse fails, fall back to a generic note.
+	local name="$1" json
+	json="$(sbx ports "$name" --json 2>/dev/null || true)"
+	if [[ -z "$json" ]]; then
+		return 0
+	fi
+	if command -v python3 >/dev/null 2>&1; then
+		CDC_PUBLISH_SPECS_JOINED="$(
+			IFS=,
+			printf '%s' "${CDC_PUBLISH_SPECS[*]:-}"
+		)" \
+			python3 - "$json" <<'PY' >&2 || \
+			echo "cdc: (could not parse 'sbx ports --json' output; run 'sbx ports $name' to see bindings)" >&2
+import json, os, sys
+raw = sys.argv[1]
+specs = [s for s in os.environ.get("CDC_PUBLISH_SPECS_JOINED", "").split(",") if s]
+
+def sandbox_port(spec):
+    base = spec.split("/", 1)[0]
+    parts = base.split(":")
+    try:
+        return int(parts[-1])
+    except ValueError:
+        return None
+
+wanted = {sandbox_port(s) for s in specs if sandbox_port(s) is not None}
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.exit(1)
+for entry in data:
+    sp = entry.get("sandbox_port")
+    if sp not in wanted:
+        continue
+    host_ip = entry.get("host_ip", "127.0.0.1")
+    host_port = entry.get("host_port")
+    proto = entry.get("protocol", "tcp")
+    print(f"cdc: published http://{host_ip}:{host_port} -> sandbox:{sp} ({proto})")
+PY
+	else
+		echo "cdc: (python3 not found; run 'sbx ports $name' to see bindings)" >&2
+	fi
+}
+
 build_sbx_argv() {
 	# Show the attach form that actually runs. We use `sbx exec` instead of
 	# `sbx run` because sbx's agent launcher misbehaves with our credential
