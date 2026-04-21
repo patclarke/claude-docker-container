@@ -45,3 +45,24 @@ teardown() { cdc_teardown; }
 	[ "$status" -ne 0 ]
 	[[ "$output" == *"--cdc-publish cannot be combined with --cdc-no-sandbox"* ]]
 }
+
+@test "mock sbx accepts 'ports --publish' and logs argv" {
+	run sbx ports my-sandbox --publish 3000
+	[ "$status" -eq 0 ]
+	run cdc_log_line 1
+	[[ "$output" == "sbx ports my-sandbox --publish 3000" ]]
+}
+
+@test "mock sbx accepts 'ports --unpublish' and logs argv" {
+	run sbx ports my-sandbox --unpublish 3000
+	[ "$status" -eq 0 ]
+	run cdc_log_line 1
+	[[ "$output" == "sbx ports my-sandbox --unpublish 3000" ]]
+}
+
+@test "mock sbx 'ports --json' emits canned JSON on stdout" {
+	export CDC_MOCK_PORTS_JSON='[{"sandbox_port":3000,"host_ip":"127.0.0.1","host_port":54321,"protocol":"tcp"}]'
+	run sbx ports my-sandbox --json
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'"sandbox_port":3000'* ]]
+}

@@ -2,6 +2,38 @@
 : "${CDC_TEST_LOG:=/tmp/cdc-test-log}"
 { printf 'sbx'; for a in "$@"; do printf ' %q' "$a"; done; printf '\n'; } >>"$CDC_TEST_LOG"
 case "$1" in
-ls | create | stop | rm) exit 0 ;;
+ls | create | stop | rm)
+	exit 0
+	;;
+exec)
+	# Tests can opt into a canned exit code via CDC_MOCK_EXEC_EXIT.
+	exit "${CDC_MOCK_EXEC_EXIT:-0}"
+	;;
+ports)
+	# Tests can force a publish failure via CDC_MOCK_PUBLISH_EXIT.
+	# --json emits CDC_MOCK_PORTS_JSON (default: []).
+	local_has_json=0
+	for arg in "$@"; do
+		if [[ "$arg" == "--json" ]]; then local_has_json=1; fi
+	done
+	if [[ $local_has_json -eq 1 ]]; then
+		printf '%s\n' "${CDC_MOCK_PORTS_JSON:-[]}"
+		exit 0
+	fi
+	for arg in "$@"; do
+		if [[ "$arg" == "--publish" ]]; then
+			exit "${CDC_MOCK_PUBLISH_EXIT:-0}"
+		fi
+		if [[ "$arg" == "--unpublish" ]]; then
+			exit "${CDC_MOCK_UNPUBLISH_EXIT:-0}"
+		fi
+	done
+	exit 0
+	;;
+secret)
+	# sbx secret list -g / set -g github — used by ensure_github_secret
+	# and preflight_github_secret. Keep no-op for test environments.
+	exit 0
+	;;
 esac
 exit 1
