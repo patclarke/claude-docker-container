@@ -54,3 +54,37 @@ teardown() { cdc_teardown; }
 	grep -q -- '--unpublish 3000' "$CDC_TEST_LOG"
 	grep -q -- '--unpublish 8080:80' "$CDC_TEST_LOG"
 }
+
+@test "run_sandbox unpublishes ports after clean exit before sbx stop" {
+	cdc_source
+	CDC_PUBLISH_SPECS=(3000)
+	CDC_KEEP_RUNNING=0
+	CDC_SAFE_MODE=0
+	CLAUDE_ARGS=()
+	export CDC_MOCK_PORTS_JSON='[]'
+	sandbox_exists() { return 0; }
+
+	run run_sandbox
+	[ "$status" -eq 0 ]
+	local unpub_line stop_line
+	unpub_line="$(grep -n -- '--unpublish 3000' "$CDC_TEST_LOG" | head -1 | cut -d: -f1)"
+	stop_line="$(grep -n '^sbx stop' "$CDC_TEST_LOG" | head -1 | cut -d: -f1)"
+	[ -n "$unpub_line" ]
+	[ -n "$stop_line" ]
+	[ "$unpub_line" -lt "$stop_line" ]
+}
+
+@test "--cdc-keep-running skips both unpublish and stop" {
+	cdc_source
+	CDC_PUBLISH_SPECS=(3000)
+	CDC_KEEP_RUNNING=1
+	CDC_SAFE_MODE=0
+	CLAUDE_ARGS=()
+	export CDC_MOCK_PORTS_JSON='[]'
+	sandbox_exists() { return 0; }
+
+	run run_sandbox
+	[ "$status" -eq 0 ]
+	! grep -q -- '--unpublish' "$CDC_TEST_LOG"
+	! grep -q '^sbx stop' "$CDC_TEST_LOG"
+}

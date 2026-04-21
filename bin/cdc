@@ -744,7 +744,7 @@ run_sandbox() {
 
 	# Register cleanup trap so sandbox stops even on Ctrl-C / SIGTERM
 	if [[ $CDC_KEEP_RUNNING -eq 0 ]]; then
-		trap 'sbx stop "$name" >/dev/null 2>&1 || true; exit 130' INT TERM
+		trap 'unpublish_ports "$name"; sbx stop "$name" >/dev/null 2>&1 || true; exit 130' INT TERM
 	fi
 
 	local attempt
@@ -766,6 +766,7 @@ run_sandbox() {
 
 	# Auto-stop the sandbox to free resources (unless --cdc-keep-running)
 	if [[ $CDC_KEEP_RUNNING -eq 0 ]]; then
+		unpublish_ports "$name"
 		sbx stop "$name" >/dev/null 2>&1 || true
 	fi
 
