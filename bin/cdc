@@ -559,12 +559,10 @@ print_resolved_bindings() {
 		return 0
 	fi
 	if command -v python3 >/dev/null 2>&1; then
-		CDC_PUBLISH_SPECS_JOINED="$(
+		if ! CDC_PUBLISH_SPECS_JOINED="$(
 			IFS=,
 			printf '%s' "${CDC_PUBLISH_SPECS[*]:-}"
-		)" \
-			python3 - "$json" <<'PY' >&2 || \
-			echo "cdc: (could not parse 'sbx ports --json' output; run 'sbx ports $name' to see bindings)" >&2
+		)" python3 - "$json" <<'PY' >&2; then
 import json, os, sys
 raw = sys.argv[1]
 specs = [s for s in os.environ.get("CDC_PUBLISH_SPECS_JOINED", "").split(",") if s]
@@ -595,6 +593,8 @@ for entry in data:
     proto = entry.get("protocol", "tcp")
     print(f"cdc: published http://{host_ip}:{host_port} -> sandbox:{sp} ({proto})")
 PY
+			echo "cdc: (could not parse 'sbx ports --json' output; run 'sbx ports $name' to see bindings)" >&2
+		fi
 	else
 		echo "cdc: (python3 not found; run 'sbx ports $name' to see bindings)" >&2
 	fi
@@ -605,7 +605,7 @@ unpublish_ports() {
 	# warnings so they cannot mask claude's real exit code.
 	local name="$1" spec err
 	for spec in "${CDC_PUBLISH_SPECS[@]+"${CDC_PUBLISH_SPECS[@]}"}"; do
-		err="$(sbx ports "$name" --unpublish "$spec" 2>&1)" || \
+		err="$(sbx ports "$name" --unpublish "$spec" 2>&1)" ||
 			echo "cdc: warn: could not unpublish $spec: $err" >&2
 	done
 	return 0
