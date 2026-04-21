@@ -798,6 +798,9 @@ dry_run_output() {
 
 main() {
 	parse_args "$@"
+	if [[ $CDC_NO_SANDBOX -eq 1 && ${#CDC_PUBLISH_SPECS[@]} -gt 0 ]]; then
+		die "--cdc-publish cannot be combined with --cdc-no-sandbox (no sandbox to publish into)"
+	fi
 	if [[ $CDC_DOCTOR -eq 1 ]]; then
 		run_doctor
 		return $?

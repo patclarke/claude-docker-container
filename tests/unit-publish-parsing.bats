@@ -37,3 +37,11 @@ teardown() { cdc_teardown; }
 	[ "${#CLAUDE_ARGS[@]}" -eq 1 ]
 	[ "${CLAUDE_ARGS[0]}" = "-c" ]
 }
+
+@test "--cdc-no-sandbox with --cdc-publish exits with a clear conflict message" {
+	local repo_root
+	repo_root="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
+	run bash -c "'$repo_root/bin/cdc' --cdc-no-sandbox --cdc-publish 3000 --cdc-dry-run"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"--cdc-publish cannot be combined with --cdc-no-sandbox"* ]]
+}
