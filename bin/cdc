@@ -221,6 +221,7 @@ WRAPPER FLAGS (consumed by cdc, not forwarded):
     --cdc-name <label>       Named sandbox for parallelism
     --cdc-mount <path>[:ro]  Add an extra mount for this invocation (repeatable)
     --cdc-no-mount <path>    Skip a config-file mount for this invocation (repeatable)
+    --cdc-publish <spec>     Publish sandbox port to host (repeatable; sbx ports syntax)
     --cdc-no-sandbox         Escape hatch — exec host claude directly
     --cdc-rm [name]          Remove the sandbox for cwd (or the named one)
     --cdc-ls                 List active sandboxes

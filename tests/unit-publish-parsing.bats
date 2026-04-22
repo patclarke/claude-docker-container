@@ -130,3 +130,11 @@ teardown() { cdc_teardown; }
 	run wc -l <"$CDC_TEST_LOG"
 	[ "$output" -eq 0 ]
 }
+
+@test "--cdc-help lists --cdc-publish" {
+	local repo_root
+	repo_root="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
+	run "$repo_root/bin/cdc" --cdc-help
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"--cdc-publish"* ]]
+}
