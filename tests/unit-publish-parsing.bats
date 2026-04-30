@@ -106,21 +106,28 @@ teardown() { cdc_teardown; }
 
 @test "unpublish_ports runs sbx ports --unpublish for each spec" {
 	CDC_PUBLISH_SPECS=(3000 8080:80)
+	export CDC_MOCK_PORTS_JSON='[]'
+	publish_ports test-sandbox >/dev/null 2>&1
 	run unpublish_ports test-sandbox
 	[ "$status" -eq 0 ]
-	[[ "$(cdc_log_line 1)" == "sbx ports test-sandbox --unpublish 3000" ]]
-	[[ "$(cdc_log_line 2)" == "sbx ports test-sandbox --unpublish 8080:80" ]]
+	# Log lines: 1=--publish 3000, 2=--publish 8080:80, 3=--json (print_resolved_bindings),
+	# 4=--unpublish canonical(3000), 5=--unpublish canonical(8080:80)
+	# Bare port 3000 → ephemeral 127.0.0.1:49153:3000/tcp; 8080:80 → 127.0.0.1:8080:80/tcp
+	[[ "$(cdc_log_line 4)" == "sbx ports test-sandbox --unpublish 127.0.0.1:49153:3000/tcp" ]]
+	[[ "$(cdc_log_line 5)" == "sbx ports test-sandbox --unpublish 127.0.0.1:8080:80/tcp" ]]
 }
 
 @test "unpublish_ports swallows errors and continues" {
 	CDC_PUBLISH_SPECS=(3000 8080:80)
+	export CDC_MOCK_PORTS_JSON='[]'
+	publish_ports test-sandbox >/dev/null 2>&1
 	export CDC_MOCK_UNPUBLISH_EXIT=1
 	run unpublish_ports test-sandbox
 	[ "$status" -eq 0 ]
-	[[ "$(cdc_log_line 1)" == *"--unpublish 3000"* ]]
-	[[ "$(cdc_log_line 2)" == *"--unpublish 8080:80"* ]]
-	[[ "$output" == *"cdc: warn: could not unpublish 3000"* ]]
-	[[ "$output" == *"cdc: warn: could not unpublish 8080:80"* ]]
+	[[ "$(cdc_log_line 4)" == *"--unpublish 127.0.0.1:49153:3000/tcp"* ]]
+	[[ "$(cdc_log_line 5)" == *"--unpublish 127.0.0.1:8080:80/tcp"* ]]
+	[[ "$output" == *"cdc: warn: could not unpublish 127.0.0.1:49153:3000/tcp"* ]]
+	[[ "$output" == *"cdc: warn: could not unpublish 127.0.0.1:8080:80/tcp"* ]]
 }
 
 @test "unpublish_ports is a no-op when CDC_PUBLISH_SPECS is empty" {

@@ -258,6 +258,7 @@ CDC_KEEP_RUNNING=0
 CDC_SAFE_MODE=0
 CDC_EXTRA_MOUNTS=()
 CDC_PUBLISH_SPECS=()
+CDC_PUBLISH_RESOLVED_SPECS=()
 CDC_SKIP_MOUNTS=()
 CDC_CONFIG_MOUNTS=()
 CDC_RESOLVED_MOUNTS=()
@@ -538,14 +539,27 @@ NOTES
 publish_ports() {
 	# Publish each --cdc-publish spec via `sbx ports <name> --publish <spec>`.
 	# Returns the exit code of the first failing spec (0 if all succeed).
-	# Callers should run unpublish_ports on failure to avoid leaking a
-	# partial-publish into the next cdc invocation.
-	local name="$1" spec rc
+	# Captures sbx's "Published HOST_IP:HOST_PORT -> SANDBOX_PORT/PROTO" output
+	# into CDC_PUBLISH_RESOLVED_SPECS so unpublish has the host_port that sbx
+	# allocated for ephemeral specs (bare SANDBOX_PORT requires the full
+	# HOST_IP:HOST_PORT:SANDBOX_PORT form to unpublish).
+	local name="$1" spec rc out resolved
+	CDC_PUBLISH_RESOLVED_SPECS=()
 	for spec in "${CDC_PUBLISH_SPECS[@]+"${CDC_PUBLISH_SPECS[@]}"}"; do
-		sbx ports "$name" --publish "$spec" || {
+		out="$(sbx ports "$name" --publish "$spec" 2>&1)" || {
 			rc=$?
+			printf '%s\n' "$out" >&2
 			return "$rc"
 		}
+		# Echo sbx's published line so the user still sees it (we captured stdout)
+		printf '%s\n' "$out" >&2
+		# Parse "Published HOST_IP:HOST_PORT -> SANDBOX_PORT/PROTO"
+		resolved="$(printf '%s' "$out" | sed -n 's/^Published \(.*\) -> \(.*\)$/\1:\2/p' | head -n1)"
+		if [[ -n "$resolved" ]]; then
+			CDC_PUBLISH_RESOLVED_SPECS+=("$resolved")
+		else
+			CDC_PUBLISH_RESOLVED_SPECS+=("$spec")
+		fi
 	done
 	print_resolved_bindings "$name"
 }
@@ -604,8 +618,11 @@ PY
 unpublish_ports() {
 	# Best-effort cleanup. Never fails — unpublish errors are logged as
 	# warnings so they cannot mask claude's real exit code.
+	# Iterates CDC_PUBLISH_RESOLVED_SPECS (the canonicalized form captured by
+	# publish_ports) so unpublish works for ephemeral specs that omitted the
+	# host port.
 	local name="$1" spec err
-	for spec in "${CDC_PUBLISH_SPECS[@]+"${CDC_PUBLISH_SPECS[@]}"}"; do
+	for spec in "${CDC_PUBLISH_RESOLVED_SPECS[@]+"${CDC_PUBLISH_RESOLVED_SPECS[@]}"}"; do
 		err="$(sbx ports "$name" --unpublish "$spec" 2>&1)" ||
 			echo "cdc: warn: could not unpublish $spec: $err" >&2
 	done
