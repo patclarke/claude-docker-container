@@ -80,6 +80,28 @@ teardown() { cdc_teardown; }
 	[ "$unpub_line" -lt "$stop_line" ]
 }
 
+@test "partial publish failure unpublishes already-resolved specs" {
+	cdc_source
+	CDC_PUBLISH_SPECS=(3000 8080:80)
+	CDC_KEEP_RUNNING=0
+	CDC_SAFE_MODE=0
+	CLAUDE_ARGS=()
+	export CDC_MOCK_PORTS_JSON='[]'
+	export CDC_MOCK_PUBLISH_FAIL_AT=2
+	export CDC_MOCK_PUBLISH_EXIT=2
+	sandbox_exists() { return 0; }
+
+	run run_sandbox
+	[ "$status" -ne 0 ]
+	# Attach must NOT have happened
+	! grep -q 'sbx exec.*-w' "$CDC_TEST_LOG"
+	# First spec succeeded — its canonical form must have been unpublished.
+	# Mock allocates ephemeral host port 49153 for bare specs.
+	grep -q -- '--unpublish 127.0.0.1:49153:3000/tcp' "$CDC_TEST_LOG"
+	# Second spec failed before resolving — must NOT appear in unpublish.
+	! grep -q -- '--unpublish.*8080:80' "$CDC_TEST_LOG"
+}
+
 @test "--cdc-keep-running skips both unpublish and stop" {
 	cdc_source
 	CDC_PUBLISH_SPECS=(3000)

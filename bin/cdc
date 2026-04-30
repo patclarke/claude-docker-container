@@ -554,10 +554,15 @@ publish_ports() {
 		# Echo sbx's published line so the user still sees it (we captured stdout)
 		printf '%s\n' "$out" >&2
 		# Parse "Published HOST_IP:HOST_PORT -> SANDBOX_PORT/PROTO"
-		resolved="$(printf '%s' "$out" | sed -n 's/^Published \(.*\) -> \(.*\)$/\1:\2/p' | head -n1)"
+		resolved="$(printf '%s' "$out" | sed -n 's/^Published \(.*\) -> \(.*\)$/\1:\2/p')"
 		if [[ -n "$resolved" ]]; then
-			CDC_PUBLISH_RESOLVED_SPECS+=("$resolved")
+			# resolved may be multi-line if sbx ever emits multiple
+			# Published lines per call (e.g. dual-stack). Append each.
+			while IFS= read -r line; do
+				CDC_PUBLISH_RESOLVED_SPECS+=("$line")
+			done <<<"$resolved"
 		else
+			echo "cdc: warn: could not parse sbx publish output for $spec; unpublish may fail at session end" >&2
 			CDC_PUBLISH_RESOLVED_SPECS+=("$spec")
 		fi
 	done
