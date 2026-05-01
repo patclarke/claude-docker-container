@@ -2,6 +2,93 @@
 : "${CDC_TEST_LOG:=/tmp/cdc-test-log}"
 { printf 'sbx'; for a in "$@"; do printf ' %q' "$a"; done; printf '\n'; } >>"$CDC_TEST_LOG"
 case "$1" in
-ls | create | stop | rm) exit 0 ;;
+ls | create | stop | rm)
+	exit 0
+	;;
+exec)
+	# Tests can opt into a canned exit code via CDC_MOCK_EXEC_EXIT.
+	exit "${CDC_MOCK_EXEC_EXIT:-0}"
+	;;
+ports)
+	# Tests can force a publish failure via CDC_MOCK_PUBLISH_EXIT.
+	# --json emits CDC_MOCK_PORTS_JSON (default: []).
+	local_has_json=0
+	for arg in "$@"; do
+		if [[ "$arg" == "--json" ]]; then local_has_json=1; fi
+	done
+	if [[ $local_has_json -eq 1 ]]; then
+		printf '%s\n' "${CDC_MOCK_PORTS_JSON:-[]}"
+		exit 0
+	fi
+	i=1
+	while [[ $i -le $# ]]; do
+		arg="${!i}"
+		if [[ "$arg" == "--publish" ]]; then
+			i=$((i + 1))
+			spec="${!i:-}"
+			# Track publish call count via $CDC_TEST_DIR/.publish-count.
+			# Lets tests simulate "first call succeeds, Nth call fails" via
+			# CDC_MOCK_PUBLISH_FAIL_AT=N + CDC_MOCK_PUBLISH_EXIT=<code>.
+			count_file="${CDC_TEST_DIR:-/tmp}/.publish-count"
+			count="$(cat "$count_file" 2>/dev/null || echo 0)"
+			count=$((count + 1))
+			echo "$count" >"$count_file"
+			if [[ -n "${CDC_MOCK_PUBLISH_FAIL_AT:-}" && "$count" -eq "$CDC_MOCK_PUBLISH_FAIL_AT" ]]; then
+				# Print sbx-style error to stderr so publish_ports can echo it.
+				echo "ERROR: simulated publish failure on call $count" >&2
+				exit "${CDC_MOCK_PUBLISH_EXIT:-1}"
+			fi
+			# Parse spec into components. Supported forms:
+			#   SANDBOX_PORT                       → ephemeral host port (49153)
+			#   HOST_PORT:SANDBOX_PORT             → use HOST_PORT as host port
+			#   HOST_IP:HOST_PORT:SANDBOX_PORT     → use HOST_IP and HOST_PORT
+			# Append /PROTO if present on the sandbox port; default proto is tcp.
+			host_ip="127.0.0.1"
+			proto="tcp"
+			# Strip /PROTO suffix if present
+			if [[ "$spec" == */* ]]; then
+				proto="${spec##*/}"
+				spec="${spec%%/*}"
+			fi
+			# Count colons to determine which form
+			colon_count="${spec//[^:]}"
+			if [[ ${#colon_count} -eq 0 ]]; then
+				# Bare sandbox port — sbx picks an ephemeral host port.
+				# Use 49153 (start of macOS ephemeral range) as a stable test value.
+				host_port=49153
+				sandbox_port="$spec"
+			elif [[ ${#colon_count} -eq 1 ]]; then
+				# HOST_PORT:SANDBOX_PORT
+				host_port="${spec%%:*}"
+				sandbox_port="${spec##*:}"
+			else
+				# HOST_IP:HOST_PORT:SANDBOX_PORT
+				host_ip="${spec%%:*}"
+				rest="${spec#*:}"
+				host_port="${rest%%:*}"
+				sandbox_port="${rest##*:}"
+			fi
+			printf 'Published %s:%s -> %s/%s\n' "$host_ip" "$host_port" "$sandbox_port" "$proto"
+			# In selective-fail mode (CDC_MOCK_PUBLISH_FAIL_AT set), successful
+			# calls always exit 0 — the counter block above already handles the
+			# specific failing call. Without CDC_MOCK_PUBLISH_FAIL_AT, use
+			# CDC_MOCK_PUBLISH_EXIT so all-fail tests continue to work.
+			if [[ -n "${CDC_MOCK_PUBLISH_FAIL_AT:-}" ]]; then
+				exit 0
+			fi
+			exit "${CDC_MOCK_PUBLISH_EXIT:-0}"
+		fi
+		if [[ "$arg" == "--unpublish" ]]; then
+			exit "${CDC_MOCK_UNPUBLISH_EXIT:-0}"
+		fi
+		i=$((i + 1))
+	done
+	exit 0
+	;;
+secret)
+	# sbx secret list -g / set -g github — used by ensure_github_secret
+	# and preflight_github_secret. Keep no-op for test environments.
+	exit 0
+	;;
 esac
 exit 1

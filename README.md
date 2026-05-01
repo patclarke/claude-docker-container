@@ -14,6 +14,7 @@ Run Claude Code in dangerous mode safely inside a fast, easy-to-use microVM that
 - [Install](#install)
 - [Updating](#updating)
 - [GitHub access from the sandbox](#github-access-from-the-sandbox)
+- [Viewing a sandbox-hosted service](#viewing-a-sandbox-hosted-service)
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
@@ -509,6 +510,72 @@ running (delete repos, push malicious code, etc.). Scope your token or
 switch to fine-grained GitHub tokens if that's a concern. See
 [Recommended: credential scoping](#recommended-credential-scoping).
 
+## Viewing a sandbox-hosted service
+
+When claude starts a dev server (Next.js, Vite, `python -m http.server`, etc.)
+inside the sandbox, your host browser can't reach it out of the box — the
+sandbox has its own network namespace, so `http://localhost:3000` on the host
+and `http://localhost:3000` inside the sandbox are different things.
+
+### Quick path — `--cdc-publish`
+
+```bash
+cdc --cdc-publish 3000
+```
+
+Start your dev server inside the sandbox as usual. cdc publishes the port
+via sbx before attaching, then prints the resolved binding to stderr:
+
+```
+cdc: published http://127.0.0.1:3000 -> sandbox:3000 (tcp)
+```
+
+**Make sure the server inside the sandbox binds `0.0.0.0`, not
+`127.0.0.1`.** sbx port publishing crosses the VM boundary; a loopback-only
+listener inside the VM isn't reachable. Common flags:
+
+- Next.js: `next dev -H 0.0.0.0`
+- Vite: `vite --host 0.0.0.0`
+- Python: `python -m http.server 3000 --bind 0.0.0.0`
+
+### Spec syntax
+
+`--cdc-publish` accepts the same grammar as `sbx ports --publish`:
+
+```bash
+cdc --cdc-publish 3000                       # ephemeral host port -> sandbox:3000/tcp
+cdc --cdc-publish 8080:80                    # host:8080 -> sandbox:80
+cdc --cdc-publish 127.0.0.1:3000:3000        # explicit host bind
+cdc --cdc-publish 5353/udp                   # protocol override
+```
+
+The flag is repeatable:
+
+```bash
+cdc --cdc-publish 3000 --cdc-publish 8080
+```
+
+### Lifecycle
+
+- Ports are published for the duration of the session. cdc runs
+  `sbx ports --unpublish` for every spec it published before it stops the
+  sandbox on exit (Ctrl-C included).
+- `--cdc-keep-running` keeps the sandbox AND the ports alive.
+- `--cdc-dry-run` prints what would be published without doing it.
+
+### Manual escape hatch
+
+If you'd rather manage ports by hand on a sandbox you already have:
+
+```bash
+cdc --cdc-ls                          # find the sandbox name
+sbx ports <sandbox-name> --publish 3000
+sbx ports <sandbox-name>              # list current bindings
+sbx ports <sandbox-name> --unpublish 3000
+```
+
+Full syntax: `sbx ports --help`.
+
 ## Quick start
 
 ```bash
@@ -683,6 +750,7 @@ through to `claude` untouched.
 | `--cdc-name <label>`       | Named sandbox (for running parallel sessions in the same dir)  |
 | `--cdc-mount <path>[:ro]`  | Add an extra mount for this invocation (repeatable)            |
 | `--cdc-no-mount <path>`    | Skip a config-file mount for this invocation (repeatable)      |
+| `--cdc-publish <spec>`     | Publish a sandbox port to the host (repeatable; uses `sbx ports` syntax) |
 | `--cdc-no-sandbox`         | Escape hatch -- exec host `claude` directly                     |
 | `--cdc-rm [name]`          | Remove the sandbox for cwd (or the named one), with a prompt   |
 | `--cdc-ls`                 | List active sandboxes                                          |
@@ -713,6 +781,9 @@ cdc --cdc-mount ~/Projects/weird-experiment:ro -c
 
 # One-off: don't let the sandbox see ~/Downloads this session
 cdc --cdc-no-mount ~/Downloads
+
+# Expose a dev server running inside the sandbox
+cdc --cdc-publish 3000
 
 # Skip AWS credentials for a session that doesn't need them
 cdc --cdc-no-mount ~/.aws -c

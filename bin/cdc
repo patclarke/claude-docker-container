@@ -221,6 +221,7 @@ WRAPPER FLAGS (consumed by cdc, not forwarded):
     --cdc-name <label>       Named sandbox for parallelism
     --cdc-mount <path>[:ro]  Add an extra mount for this invocation (repeatable)
     --cdc-no-mount <path>    Skip a config-file mount for this invocation (repeatable)
+    --cdc-publish <spec>     Publish sandbox port to host (repeatable; sbx ports syntax)
     --cdc-no-sandbox         Escape hatch — exec host claude directly
     --cdc-rm [name]          Remove the sandbox for cwd (or the named one)
     --cdc-ls                 List active sandboxes
@@ -256,6 +257,8 @@ CDC_RM_NAME=""
 CDC_KEEP_RUNNING=0
 CDC_SAFE_MODE=0
 CDC_EXTRA_MOUNTS=()
+CDC_PUBLISH_SPECS=()
+CDC_PUBLISH_RESOLVED_SPECS=()
 CDC_SKIP_MOUNTS=()
 CDC_CONFIG_MOUNTS=()
 CDC_RESOLVED_MOUNTS=()
@@ -533,6 +536,104 @@ Use any of these instead — all return full data:
 NOTES
 }
 
+publish_ports() {
+	# Publish each --cdc-publish spec via `sbx ports <name> --publish <spec>`.
+	# Returns the exit code of the first failing spec (0 if all succeed).
+	# Captures sbx's "Published HOST_IP:HOST_PORT -> SANDBOX_PORT/PROTO" output
+	# into CDC_PUBLISH_RESOLVED_SPECS so unpublish has the host_port that sbx
+	# allocated for ephemeral specs (bare SANDBOX_PORT requires the full
+	# HOST_IP:HOST_PORT:SANDBOX_PORT form to unpublish).
+	local name="$1" spec rc out resolved
+	CDC_PUBLISH_RESOLVED_SPECS=()
+	for spec in "${CDC_PUBLISH_SPECS[@]+"${CDC_PUBLISH_SPECS[@]}"}"; do
+		out="$(sbx ports "$name" --publish "$spec" 2>&1)" || {
+			rc=$?
+			printf '%s\n' "$out" >&2
+			return "$rc"
+		}
+		# Echo sbx's published line so the user still sees it (we captured stdout)
+		printf '%s\n' "$out" >&2
+		# Parse "Published HOST_IP:HOST_PORT -> SANDBOX_PORT/PROTO"
+		resolved="$(printf '%s' "$out" | sed -n 's/^Published \(.*\) -> \(.*\)$/\1:\2/p')"
+		if [[ -n "$resolved" ]]; then
+			# resolved may be multi-line if sbx ever emits multiple
+			# Published lines per call (e.g. dual-stack). Append each.
+			while IFS= read -r line; do
+				CDC_PUBLISH_RESOLVED_SPECS+=("$line")
+			done <<<"$resolved"
+		else
+			echo "cdc: warn: could not parse sbx publish output for $spec; unpublish may fail at session end" >&2
+			CDC_PUBLISH_RESOLVED_SPECS+=("$spec")
+		fi
+	done
+	print_resolved_bindings "$name"
+}
+
+print_resolved_bindings() {
+	# Best-effort: list bindings from `sbx ports <name> --json` and print
+	# one human-readable line per spec we asked for. If python3 is missing
+	# or the JSON parse fails, fall back to a generic note.
+	local name="$1" json
+	json="$(sbx ports "$name" --json 2>/dev/null || true)"
+	if [[ -z "$json" ]]; then
+		return 0
+	fi
+	if command -v python3 >/dev/null 2>&1; then
+		if ! CDC_PUBLISH_SPECS_JOINED="$(
+			IFS=,
+			printf '%s' "${CDC_PUBLISH_SPECS[*]:-}"
+		)" python3 - "$json" <<'PY' >&2; then
+import json, os, sys
+raw = sys.argv[1]
+specs = [s for s in os.environ.get("CDC_PUBLISH_SPECS_JOINED", "").split(",") if s]
+
+def sandbox_port(spec):
+    base = spec.split("/", 1)[0]
+    parts = base.split(":")
+    try:
+        return int(parts[-1])
+    except ValueError:
+        return None
+
+wanted = {sandbox_port(s) for s in specs if sandbox_port(s) is not None}
+try:
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        sys.exit(1)
+except Exception:
+    sys.exit(1)
+for entry in data:
+    sp = entry.get("sandbox_port")
+    if sp not in wanted:
+        continue
+    host_ip = entry.get("host_ip", "127.0.0.1")
+    host_port = entry.get("host_port")
+    if host_port is None:
+        continue
+    proto = entry.get("protocol", "tcp")
+    print(f"cdc: published http://{host_ip}:{host_port} -> sandbox:{sp} ({proto})")
+PY
+			echo "cdc: (could not parse 'sbx ports --json' output; run 'sbx ports $name' to see bindings)" >&2
+		fi
+	else
+		echo "cdc: (python3 not found; run 'sbx ports $name' to see bindings)" >&2
+	fi
+}
+
+unpublish_ports() {
+	# Best-effort cleanup. Never fails — unpublish errors are logged as
+	# warnings so they cannot mask claude's real exit code.
+	# Iterates CDC_PUBLISH_RESOLVED_SPECS (the canonicalized form captured by
+	# publish_ports) so unpublish works for ephemeral specs that omitted the
+	# host port.
+	local name="$1" spec err
+	for spec in "${CDC_PUBLISH_RESOLVED_SPECS[@]+"${CDC_PUBLISH_RESOLVED_SPECS[@]}"}"; do
+		err="$(sbx ports "$name" --unpublish "$spec" 2>&1)" ||
+			echo "cdc: warn: could not unpublish $spec: $err" >&2
+	done
+	return 0
+}
+
 build_sbx_argv() {
 	# Show the attach form that actually runs. We use `sbx exec` instead of
 	# `sbx run` because sbx's agent launcher misbehaves with our credential
@@ -635,6 +736,23 @@ run_sandbox() {
 	# Step 2b: install sandbox-specific CLAUDE.md notes (idempotent)
 	install_sandbox_notes "$name"
 
+	# Step 2c: publish requested ports (after create+symlinks+notes, before attach)
+	if [[ ${#CDC_PUBLISH_SPECS[@]} -gt 0 ]]; then
+		publish_ports "$name" || {
+			local pub_rc=$?
+			echo "cdc: port publish failed; aborting before attach" >&2
+			# Partial-publish cleanup: unpublish_ports swallows errors, so
+			# it's safe even for specs that never published. Otherwise an
+			# earlier successful publish leaks into the next invocation.
+			unpublish_ports "$name"
+			spinner_stop
+			if [[ $CDC_KEEP_RUNNING -eq 0 ]]; then
+				sbx stop "$name" >/dev/null 2>&1 || true
+			fi
+			return "$pub_rc"
+		}
+	fi
+
 	# sbx race workaround: sleep before the interactive attach to let the
 	# daemon settle — see CLAUDE.md Lesson 5.
 	sleep 1
@@ -649,7 +767,7 @@ run_sandbox() {
 
 	# Register cleanup trap so sandbox stops even on Ctrl-C / SIGTERM
 	if [[ $CDC_KEEP_RUNNING -eq 0 ]]; then
-		trap 'sbx stop "$name" >/dev/null 2>&1 || true; exit 130' INT TERM
+		trap 'unpublish_ports "$name"; sbx stop "$name" >/dev/null 2>&1 || true; exit 130' INT TERM
 	fi
 
 	local attempt
@@ -671,6 +789,7 @@ run_sandbox() {
 
 	# Auto-stop the sandbox to free resources (unless --cdc-keep-running)
 	if [[ $CDC_KEEP_RUNNING -eq 0 ]]; then
+		unpublish_ports "$name"
 		sbx stop "$name" >/dev/null 2>&1 || true
 	fi
 
@@ -697,6 +816,11 @@ parse_args() {
 		--cdc-no-mount)
 			[[ $# -ge 2 ]] || die "--cdc-no-mount requires a path"
 			CDC_SKIP_MOUNTS+=("$2")
+			shift 2
+			;;
+		--cdc-publish)
+			[[ $# -ge 2 ]] || die "--cdc-publish requires a <spec> value"
+			CDC_PUBLISH_SPECS+=("$2")
 			shift 2
 			;;
 		--cdc-no-sandbox)
@@ -783,6 +907,15 @@ dry_run_output() {
 		done
 	fi
 	echo
+	if [[ ${#CDC_PUBLISH_SPECS[@]} -gt 0 ]]; then
+		echo "PUBLISH (would run after create):"
+		local spec sandbox_name
+		sandbox_name="$(compute_sandbox_name)"
+		for spec in "${CDC_PUBLISH_SPECS[@]}"; do
+			echo "  sbx ports $sandbox_name --publish $spec"
+		done
+		echo
+	fi
 	echo "CLAUDE_ARGS: ${CLAUDE_ARGS[*]:-<none>}"
 	echo
 	echo "COMMAND:"
@@ -792,6 +925,9 @@ dry_run_output() {
 
 main() {
 	parse_args "$@"
+	if [[ $CDC_NO_SANDBOX -eq 1 && ${#CDC_PUBLISH_SPECS[@]} -gt 0 ]]; then
+		die "--cdc-publish cannot be combined with --cdc-no-sandbox (no sandbox to publish into)"
+	fi
 	if [[ $CDC_DOCTOR -eq 1 ]]; then
 		run_doctor
 		return $?
